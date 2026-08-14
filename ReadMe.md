@@ -1,1 +1,61 @@
-This is my job finding application 
+# JobFinder
+
+JobFinder is a personal job-search copilot that watches selected companies, ranks new internships and recruiting events, and helps the user track applications. Later releases may submit eligible applications using approved profile data.
+
+The product also tracks applications, detects recruiting milestones, recommends preparation material, and coordinates study, interview, and event time with the user's calendar.
+
+## Product principles
+
+- **User control:** `review`, `assisted`, and `auto-submit` modes are configured per company or job filter.
+- **No fabricated answers:** uncertain, sensitive, legal, demographic, sponsorship, salary, or novel free-text questions always require review.
+- **Explainable matching:** every fit score includes evidence, missing qualifications, freshness, and confidence—not just a percentage.
+- **Responsible collection:** prefer company career feeds and permitted APIs. Do not bypass access controls, CAPTCHAs, or site terms.
+- **Idempotent automation:** a posting can never produce duplicate applications or duplicate calendar events.
+
+## Release-one scope: discovery and tracking
+
+1. Import target companies by CSV and manage a candidate profile plus versioned resumes.
+2. Poll company career and early-career/event sources on a user schedule (default every minute, subject to source rate limits).
+3. Normalize and deduplicate internships, early-career roles, and recruiting events as distinct opportunity types.
+4. Rank opportunities by resume match, preferences, hard requirements, freshness, and deadline risk.
+5. Notify the user with an explanation and an open/save/dismiss action; events also offer registration and calendar actions.
+6. Open the company's application page for user-completed applications.
+7. Track application stages manually and preserve an auditable timeline.
+8. Record the application destination so a future release can assess assisted or automatic application support independently from discovery.
+
+Release one does **not** fill or submit applications. Discovery is application-platform agnostic: it watches the career and early-career pages supplied or discovered for every target company, follows job and event listings, and detects matching changes regardless of where an application or event registration is hosted. Greenhouse and other provider-specific adapters are considered later for application automation only.
+
+## Documents
+
+- [Product specification](docs/product-spec.md)
+- [System architecture](docs/architecture.md)
+- [Delivery roadmap](docs/roadmap.md)
+
+## Recommended implementation stack
+
+- Web: Next.js + TypeScript
+- API/workers: TypeScript with PostgreSQL, Redis, and a durable job queue
+- Future browser-assisted applications: Playwright workers isolated per user
+- AI: provider-independent structured-output adapter with embeddings for retrieval
+- Auth: OIDC provider; encrypted OAuth token vault for Gmail/calendar connections
+- Observability: OpenTelemetry, structured logs, error tracking, and immutable audit events
+
+The architecture keeps the scheduler and browser automation outside the web request path so the product can begin as a modular monolith and split into services only when load requires it.
+
+## Run locally
+
+```bash
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`. The current foundation includes the release-one dashboard, target-company onboarding, separate career/early-career/event sources, role and event filters, normalized job/event domain types, and the provider-neutral discovery strategy interface.
+
+Validation commands:
+
+```bash
+npm test
+npm run typecheck
+npm run lint
+npm run build
+```
