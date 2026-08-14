@@ -83,3 +83,21 @@ export function createTargetCompany(input: TargetCompanyInput): ValidationResult
     },
   };
 }
+
+export function updateTargetCompany(current: TargetCompany, input: TargetCompanyInput): ValidationResult {
+  const result = createTargetCompany(input);
+  if (!result.ok) return result;
+
+  return {
+    ok: true,
+    value: {
+      ...result.value,
+      id: current.id,
+      createdAt: current.createdAt,
+      sources: result.value.sources.map((source) => ({
+        ...source,
+        id: current.sources.find(({ kind }) => kind === source.kind)?.id ?? source.id,
+      })),
+    },
+  };
+}
