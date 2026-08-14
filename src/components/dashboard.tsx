@@ -2,10 +2,11 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createTargetCompany, updateTargetCompany } from "@/domain/target-company";
-import type { TargetCompany } from "@/domain/opportunity";
+import type { JobPosting, TargetCompany } from "@/domain/opportunity";
 
 type View = "overview" | "opportunities" | "events" | "applications" | "targets";
 const STORAGE_KEY = "jobfinder.target-companies.v1";
+const JOBS_STORAGE_KEY = "jobfinder.opportunities.v1";
 
 const demoTargets: TargetCompany[] = [{
   id: "demo-1",
@@ -40,25 +41,66 @@ function readStoredTargets(): TargetCompany[] {
   }
 }
 
+function readStoredJobs(): JobPosting[] {
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(JOBS_STORAGE_KEY) ?? "[]");
+    return Array.isArray(parsed) ? parsed as JobPosting[] : [];
+  } catch {
+    return [];
+  }
+}
+
 export function Dashboard() {
   const [view, setView] = useState<View>("overview");
   const [targets, setTargets] = useState(demoTargets);
+  const [jobs, setJobs] = useState<JobPosting[]>([]);
   const [storageReady, setStorageReady] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [editingTarget, setEditingTarget] = useState<TargetCompany | null>(null);
+  const [scanState, setScanState] = useState<"idle" | "scanning" | "success" | "error">("idle");
+  const [scanMessage, setScanMessage] = useState("Run the first scan to discover opportunities");
   const sourceCount = useMemo(() => targets.reduce((total, target) => total + target.sources.length, 0), [targets]);
 
   useEffect(() => {
     // Hydrate client-owned data after the server-rendered shell mounts.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setTargets(readStoredTargets());
+    setJobs(readStoredJobs());
     setStorageReady(true);
   }, []);
 
   useEffect(() => {
     if (storageReady) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(targets));
   }, [storageReady, targets]);
+
+  useEffect(() => {
+    if (storageReady) window.localStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(jobs));
+  }, [jobs, storageReady]);
+
+  async function scanNow() {
+    if (!targets.length || scanState === "scanning") return;
+    setScanState("scanning");
+    setScanMessage(`Scanning ${targets.length} ${targets.length === 1 ? "company" : "companies"}…`);
+    try {
+      const response = await fetch("/api/discovery/scan", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ targets }),
+      });
+      const payload: unknown = await response.json();
+      if (!response.ok || !payload || typeof payload !== "object" || !Array.isArray((payload as { jobs?: unknown }).jobs)) {
+        throw new Error((payload as { error?: string } | null)?.error ?? "The scan could not be completed.");
+      }
+      const result = payload as { jobs: JobPosting[]; failures?: Array<{ message: string }> };
+      setJobs((current) => [...new Map([...result.jobs, ...current].map((job) => [`${job.companyId}:${job.canonicalUrl}`, job])).values()]);
+      const failureCount = result.failures?.length ?? 0;
+      setScanState("success");
+      setScanMessage(`Found ${result.jobs.length} matching ${result.jobs.length === 1 ? "role" : "roles"}${failureCount ? ` · ${failureCount} source ${failureCount === 1 ? "failed" : "failures"}` : ""}`);
+      setView("opportunities");
+    } catch (error) {
+      setScanState("error");
+      setScanMessage(error instanceof Error ? error.message : "The scan could not be completed.");
+    }
+  }
 
   function navigate(nextView: View) {
     setView(nextView);
@@ -124,17 +166,18 @@ export function Dashboard() {
           {navItems.map((item) => (
             <button className={view === item.id ? "active" : ""} key={item.id} onClick={() => navigate(item.id)} aria-current={view === item.id ? "page" : undefined} aria-label={item.label}>
               {item.label}
-              {(item.id === "opportunities" || item.id === "events") && <span className="count">0</span>}
+              {item.id === "opportunities" && <span className="count">{jobs.length}</span>}
+              {item.id === "events" && <span className="count">0</span>}
             </button>
           ))}
         </nav>
-        <div className="scanStatus warning"><span className="pulse paused" />Scanner not connected<br/><small>Sources are saved, but scans are not running</small></div>
+        <div className={`scanStatus ${scanState}`}><span className={`pulse ${scanState}`} />{scanState === "scanning" ? "Scanning sources" : "Manual discovery"}<br/><small>{scanMessage}</small><button onClick={scanNow} disabled={!targets.length || scanState === "scanning"}>{scanState === "scanning" ? "Scanning…" : "Scan now"}</button></div>
       </aside>
 
       <section className="content">
-        {view === "overview" && <Overview targets={targets} sourceCount={sourceCount} onAdd={openAddCompany} onViewTargets={() => navigate("targets")} />}
+        {view === "overview" && <Overview targets={targets} sourceCount={sourceCount} jobs={jobs} onAdd={openAddCompany} onScan={scanNow} scanState={scanState} onViewTargets={() => navigate("targets")} />}
         {view === "targets" && <TargetsView targets={targets} showForm={showForm} editingTarget={editingTarget} errors={errors} onShowForm={() => { setEditingTarget(null); setShowForm(true); }} onHideForm={() => { setShowForm(false); setEditingTarget(null); setErrors([]); }} onSubmit={addTarget} onEdit={editTarget} onRemove={removeTarget} />}
-        {view === "opportunities" && <EmptyView eyebrow="Discovery feed · scanner not connected" title="Opportunities" body="Your sources are saved, but the scheduled page scanner has not been implemented yet. No company—including Notion—will populate opportunities until that worker is connected." action="Manage watched companies" onAction={() => navigate("targets")} />}
+        {view === "opportunities" && <OpportunitiesView jobs={jobs} targets={targets} scanState={scanState} scanMessage={scanMessage} onScan={scanNow} />}
         {view === "events" && <EmptyView eyebrow="Early-career calendar" title="Events" body="Information sessions, university events, workshops, hackathons, and registration deadlines will appear here." action="Manage event sources" onAction={() => navigate("targets")} />}
         {view === "applications" && <EmptyView eyebrow="Application pipeline" title="Applications" body="Applications you track will move through saved, submitted, assessment, interview, and decision stages here." action="Browse opportunities" onAction={() => navigate("opportunities")} />}
       </section>
@@ -142,19 +185,29 @@ export function Dashboard() {
   );
 }
 
-function Overview({ targets, sourceCount, onAdd, onViewTargets }: { targets: TargetCompany[]; sourceCount: number; onAdd: () => void; onViewTargets: () => void }) {
+function Overview({ targets, sourceCount, jobs, onAdd, onScan, scanState, onViewTargets }: { targets: TargetCompany[]; sourceCount: number; jobs: JobPosting[]; onAdd: () => void; onScan: () => void; scanState: string; onViewTargets: () => void }) {
   return <>
     <header><div><p className="eyebrow">Opportunity radar</p><h1>Good morning.</h1><p className="lede">Your company watchlist is ready for jobs and early-career events.</p></div><button className="primary" onClick={onAdd}>+ Add company</button></header>
     <div className="metrics">
       <article><span>Target companies</span><strong>{targets.length}</strong><small>Across your watchlist</small></article>
       <article><span>Active sources</span><strong>{sourceCount}</strong><small>Career and event pages</small></article>
-      <article><span>New opportunities</span><strong>0</strong><small>Waiting for first scan</small></article>
+      <article><span>New opportunities</span><strong>{jobs.length}</strong><small>{jobs.length ? "Matching discovered roles" : "Waiting for first scan"}</small></article>
       <article><span>Applications</span><strong>0</strong><small>Nothing tracked yet</small></article>
     </div>
     <section className="panel overviewTargets">
       <div className="panelTitle"><div><p className="eyebrow">Watchlist preview</p><h2>Companies being watched</h2></div><button className="textButton" onClick={onViewTargets}>View all →</button></div>
       {targets.length ? <div className="compactList">{targets.slice(0, 3).map((target) => <div key={target.id}><span className="companyIcon">{target.name.slice(0, 2).toUpperCase()}</span><span><b>{target.name}</b><small>{target.sources.length} active source{target.sources.length === 1 ? "" : "s"}</small></span></div>)}</div> : <p className="emptyInline">No companies yet. Add one to begin watching.</p>}
     </section>
+    <div className="scanCta"><div><b>Ready to check your sources?</b><span>Run an on-demand scan across all configured career pages.</span></div><button className="primary" onClick={onScan} disabled={scanState === "scanning"}>{scanState === "scanning" ? "Scanning…" : "Scan now"}</button></div>
+  </>;
+}
+
+function OpportunitiesView({ jobs, targets, scanState, scanMessage, onScan }: { jobs: JobPosting[]; targets: TargetCompany[]; scanState: string; scanMessage: string; onScan: () => void }) {
+  const companyName = (id: string) => targets.find((target) => target.id === id)?.name ?? "Unknown company";
+  return <>
+    <header><div><p className="eyebrow">Discovery feed</p><h1>Opportunities</h1><p className="lede">Normalized roles matching the filters on your watched companies.</p></div><button className="primary" onClick={onScan} disabled={scanState === "scanning"}>{scanState === "scanning" ? "Scanning…" : "Scan now"}</button></header>
+    <div className={`scanBanner ${scanState}`}><span>{scanMessage}</span></div>
+    {jobs.length ? <section className="panel opportunityList">{jobs.map((job) => <article className="opportunity" key={`${job.companyId}:${job.canonicalUrl}`}><div><p className="eyebrow">{companyName(job.companyId)} · {job.employmentType.replace("_", " ").toLowerCase()}</p><h2>{job.title}</h2><p>{job.locations.join(" · ") || "Location not provided"}</p></div><div className="opportunityMeta"><span>{Math.round(job.extractionConfidence * 100)}% extraction confidence</span><a href={job.applicationUrl} target="_blank" rel="noreferrer">View role ↗</a></div></article>)}</section> : <section className="panel emptyState"><div className="emptyGlyph">⌕</div><h2>No matching roles yet</h2><p>Run a scan to fetch configured career pages. Check each company’s career URL and role keywords if a known opening is missing.</p><button className="primary" onClick={onScan} disabled={scanState === "scanning"}>Scan watched companies</button></section>}
   </>;
 }
 

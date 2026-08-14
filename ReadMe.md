@@ -51,6 +51,8 @@ npm run dev
 
 Open `http://localhost:3000`. The current foundation includes the release-one dashboard, target-company onboarding, separate career/early-career/event sources, role and event filters, normalized job/event domain types, and the provider-neutral discovery strategy interface.
 
+The first discovery pipeline is operational through **Scan now**. It fetches configured career and early-career pages server-side, extracts schema.org job postings, ordinary job links, and common embedded application-state records, filters them by the company role keywords, deduplicates canonical URLs, and persists the resulting opportunity feed in the browser. Scheduled cron scans, rendered-browser fallback, event extraction, and database persistence are not connected yet.
+
 Validation commands:
 
 ```bash

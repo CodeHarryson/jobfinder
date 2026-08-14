@@ -1,12 +1,12 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { Dashboard } from "./dashboard";
 
 const STORAGE_KEY = "jobfinder.target-companies.v1";
 
 beforeEach(() => window.localStorage.clear());
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe("Dashboard navigation and watched companies", () => {
   test("opens every sidebar view", async () => {
@@ -62,5 +62,25 @@ describe("Dashboard navigation and watched companies", () => {
     expect(screen.getByRole("heading", { level: 3, name: "Northstar Technologies" })).toBeTruthy();
     expect(screen.queryByRole("heading", { level: 3, name: "Northstar Labs" })).toBeNull();
     await waitFor(() => expect(window.localStorage.getItem(STORAGE_KEY)).toContain("Northstar Technologies"));
+  });
+
+  test("scans configured sources and displays normalized opportunities", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      jobs: [{
+        kind: "JOB", id: "job-1", companyId: "demo-1", sourceId: "s1",
+        sourceUrl: "https://northstar.example/careers", canonicalUrl: "https://northstar.example/jobs/intern",
+        applicationUrl: "https://northstar.example/jobs/intern", title: "Software Engineering Intern",
+        description: "Build useful products", locations: ["New York, NY"], employmentType: "INTERNSHIP",
+        firstSeenAt: "2026-08-14T00:00:00.000Z", lastSeenAt: "2026-08-14T00:00:00.000Z",
+        contentFingerprint: "abc", extractionConfidence: 0.95,
+      }], failures: [], scannedAt: "2026-08-14T00:00:00.000Z",
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    const user = userEvent.setup();
+    render(<Dashboard />);
+
+    await user.click(screen.getAllByRole("button", { name: "Scan now" })[0]);
+    expect(await screen.findByRole("heading", { level: 2, name: "Software Engineering Intern" })).toBeTruthy();
+    expect(screen.getByText("95% extraction confidence")).toBeTruthy();
+    await waitFor(() => expect(window.localStorage.getItem("jobfinder.opportunities.v1")).toContain("Software Engineering Intern"));
   });
 });
