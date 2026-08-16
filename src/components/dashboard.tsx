@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createTargetCompany, updateTargetCompany } from "@/domain/target-company";
+import { STARTER_PRESETS, type CompanyPreset } from "@/domain/company-presets";
 import type { JobPosting, TargetCompany } from "@/domain/opportunity";
 
 type View = "overview" | "opportunities" | "events" | "applications" | "targets";
@@ -63,11 +64,29 @@ export function Dashboard() {
   const sourceCount = useMemo(() => targets.reduce((total, target) => total + target.sources.length, 0), [targets]);
 
   useEffect(() => {
+    const localTargets = readStoredTargets();
+    const localJobs = readStoredJobs();
     // Hydrate client-owned data after the server-rendered shell mounts.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setTargets(readStoredTargets());
-    setJobs(readStoredJobs());
+    setTargets(localTargets);
+    setJobs(localJobs);
     setStorageReady(true);
+    void (async () => {
+      try {
+        const [targetResponse, jobResponse] = await Promise.all([fetch("/api/targets"), fetch("/api/opportunities")]);
+        if (targetResponse.ok) {
+          const payload = await targetResponse.json() as { targets?: TargetCompany[] };
+          if (payload.targets?.length) setTargets(payload.targets);
+          else if (localTargets.length) await fetch("/api/targets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ targets: localTargets }) });
+        }
+        if (jobResponse.ok) {
+          const payload = await jobResponse.json() as { jobs?: JobPosting[] };
+          if (payload.jobs?.length) setJobs(payload.jobs);
+        }
+      } catch {
+        // Local storage remains an offline fallback while the server is unavailable.
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -142,6 +161,9 @@ export function Dashboard() {
     setTargets((current) => editingTarget
       ? current.map((target) => target.id === editingTarget.id ? result.value : target)
       : [result.value, ...current]);
+    void fetch(editingTarget ? `/api/targets/${result.value.id}` : "/api/targets", {
+      method: editingTarget ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(result.value),
+    }).catch(() => undefined);
     setErrors([]);
     setShowForm(false);
     setEditingTarget(null);
@@ -150,12 +172,27 @@ export function Dashboard() {
 
   function removeTarget(id: string) {
     setTargets((current) => current.filter((target) => target.id !== id));
+    setJobs((current) => current.filter((job) => job.companyId !== id));
+    void fetch(`/api/targets/${id}`, { method: "DELETE" }).catch(() => undefined);
   }
 
   function editTarget(target: TargetCompany) {
     setEditingTarget(target);
     setShowForm(true);
     setErrors([]);
+  }
+
+  function addPreset(preset: CompanyPreset) {
+    const existingDomains = new Set(targets.map(({ domain }) => domain));
+    const additions = preset.companies
+      .filter(({ domain }) => !existingDomains.has(domain))
+      .map(createTargetCompany)
+      .flatMap((result) => result.ok ? [result.value] : []);
+    setTargets((current) => [...additions, ...current]);
+    if (additions.length) void fetch("/api/targets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ targets: additions }) }).catch(() => undefined);
+    setView("targets");
+    setShowForm(false);
+    setEditingTarget(null);
   }
 
   return (
@@ -176,7 +213,7 @@ export function Dashboard() {
 
       <section className="content">
         {view === "overview" && <Overview targets={targets} sourceCount={sourceCount} jobs={jobs} onAdd={openAddCompany} onScan={scanNow} scanState={scanState} onViewTargets={() => navigate("targets")} />}
-        {view === "targets" && <TargetsView targets={targets} showForm={showForm} editingTarget={editingTarget} errors={errors} onShowForm={() => { setEditingTarget(null); setShowForm(true); }} onHideForm={() => { setShowForm(false); setEditingTarget(null); setErrors([]); }} onSubmit={addTarget} onEdit={editTarget} onRemove={removeTarget} />}
+        {view === "targets" && <TargetsView targets={targets} showForm={showForm} editingTarget={editingTarget} errors={errors} onAddPreset={addPreset} onShowForm={() => { setEditingTarget(null); setShowForm(true); }} onHideForm={() => { setShowForm(false); setEditingTarget(null); setErrors([]); }} onSubmit={addTarget} onEdit={editTarget} onRemove={removeTarget} />}
         {view === "opportunities" && <OpportunitiesView jobs={jobs} targets={targets} scanState={scanState} scanMessage={scanMessage} onScan={scanNow} />}
         {view === "events" && <EmptyView eyebrow="Early-career calendar" title="Events" body="Information sessions, university events, workshops, hackathons, and registration deadlines will appear here." action="Manage event sources" onAction={() => navigate("targets")} />}
         {view === "applications" && <EmptyView eyebrow="Application pipeline" title="Applications" body="Applications you track will move through saved, submitted, assessment, interview, and decision stages here." action="Browse opportunities" onAction={() => navigate("opportunities")} />}
@@ -211,9 +248,13 @@ function OpportunitiesView({ jobs, targets, scanState, scanMessage, onScan }: { 
   </>;
 }
 
-function TargetsView({ targets, showForm, editingTarget, errors, onShowForm, onHideForm, onSubmit, onEdit, onRemove }: { targets: TargetCompany[]; showForm: boolean; editingTarget: TargetCompany | null; errors: string[]; onShowForm: () => void; onHideForm: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; onEdit: (target: TargetCompany) => void; onRemove: (id: string) => void }) {
+function TargetsView({ targets, showForm, editingTarget, errors, onAddPreset, onShowForm, onHideForm, onSubmit, onEdit, onRemove }: { targets: TargetCompany[]; showForm: boolean; editingTarget: TargetCompany | null; errors: string[]; onAddPreset: (preset: CompanyPreset) => void; onShowForm: () => void; onHideForm: () => void; onSubmit: (event: FormEvent<HTMLFormElement>) => void; onEdit: (target: TargetCompany) => void; onRemove: (id: string) => void }) {
   return <>
     <header><div><p className="eyebrow">Configured sources</p><h1>Target companies</h1><p className="lede">Manage every company, career page, and early-career event source being watched.</p></div><button className="primary" onClick={showForm ? onHideForm : onShowForm}>{showForm ? "Close" : "+ Add company"}</button></header>
+    <div className="presetGrid">{STARTER_PRESETS.map((preset) => {
+      const missingCount = preset.companies.filter(({ domain }) => !targets.some((target) => target.domain === domain)).length;
+      return <section className="presetCard" key={preset.id}><div className="presetMark">{preset.name.slice(0, 1)}</div><div><p className="eyebrow">Starter watchlist</p><h2>{preset.name}</h2><p>{preset.description}. Includes official career sources and editable early-career filters.</p></div><button className="ghost" onClick={() => onAddPreset(preset)} disabled={missingCount === 0}>{missingCount === 0 ? "Added" : `Add ${missingCount} companies`}</button></section>;
+    })}</div>
     {showForm && <TargetForm key={editingTarget?.id ?? "new"} target={editingTarget} errors={errors} onSubmit={onSubmit} onCancel={onHideForm} />}
     <section className="panel">
       <div className="panelTitle"><div><p className="eyebrow">Active watchlist</p><h2>{targets.length} {targets.length === 1 ? "company" : "companies"}</h2></div><span className="badge">ATS agnostic</span></div>

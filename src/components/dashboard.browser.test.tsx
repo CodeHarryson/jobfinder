@@ -65,7 +65,7 @@ describe("Dashboard navigation and watched companies", () => {
   });
 
   test("scans configured sources and displays normalized opportunities", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+    const scanResult = {
       jobs: [{
         kind: "JOB", id: "job-1", companyId: "demo-1", sourceId: "s1",
         sourceUrl: "https://northstar.example/careers", canonicalUrl: "https://northstar.example/jobs/intern",
@@ -74,7 +74,22 @@ describe("Dashboard navigation and watched companies", () => {
         firstSeenAt: "2026-08-14T00:00:00.000Z", lastSeenAt: "2026-08-14T00:00:00.000Z",
         contentFingerprint: "abc", extractionConfidence: 0.95,
       }], failures: [], scannedAt: "2026-08-14T00:00:00.000Z",
-    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const payload = url === "/api/targets"
+        ? { targets: [] }
+        : url === "/api/opportunities"
+          ? { jobs: [] }
+          : init?.method === "POST" && url === "/api/discovery/scan"
+            ? scanResult
+            : {};
+
+      return new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
     const user = userEvent.setup();
     render(<Dashboard />);
 
@@ -82,5 +97,45 @@ describe("Dashboard navigation and watched companies", () => {
     expect(await screen.findByRole("heading", { level: 2, name: "Software Engineering Intern" })).toBeTruthy();
     expect(screen.getByText("95% extraction confidence")).toBeTruthy();
     await waitFor(() => expect(window.localStorage.getItem("jobfinder.opportunities.v1")).toContain("Software Engineering Intern"));
+  });
+
+  test("adds the MAANGO starter watchlist without duplicates", async () => {
+    const user = userEvent.setup();
+    render(<Dashboard />);
+
+    await user.click(screen.getByRole("button", { name: "Target companies" }));
+    await user.click(screen.getByRole("button", { name: "Add 6 companies" }));
+
+    for (const company of ["Meta", "Apple", "Amazon", "Netflix", "Google", "Oracle"]) {
+      expect(screen.getByRole("heading", { level: 3, name: company })).toBeTruthy();
+    }
+    expect((screen.getByRole("button", { name: "Added" }) as HTMLButtonElement).disabled).toBe(true);
+    await waitFor(() => expect(window.localStorage.getItem(STORAGE_KEY)).toContain("metacareers.com"));
+  });
+
+  test("adds the unicorn and scale-up starter watchlist", async () => {
+    const user = userEvent.setup();
+    render(<Dashboard />);
+
+    await user.click(screen.getByRole("button", { name: "Target companies" }));
+    await user.click(screen.getByRole("button", { name: "Add 10 companies" }));
+
+    for (const company of ["Together AI", "Stripe", "Notion", "Anthropic", "OpenAI", "Databricks", "Canva", "Rippling", "Ramp", "Anduril"]) {
+      expect(screen.getByRole("heading", { level: 3, name: company })).toBeTruthy();
+    }
+    await waitFor(() => expect(window.localStorage.getItem(STORAGE_KEY)).toContain("together.ai"));
+  });
+
+  test("adds the curated top-tech starter watchlist", async () => {
+    const user = userEvent.setup();
+    render(<Dashboard />);
+
+    await user.click(screen.getByRole("button", { name: "Target companies" }));
+    await user.click(screen.getByRole("button", { name: "Add 15 companies" }));
+
+    for (const company of ["NVIDIA", "Microsoft", "OpenAI", "Anthropic", "Cloudflare", "Snowflake", "Adobe", "Uber"]) {
+      expect(screen.getByRole("heading", { level: 3, name: company })).toBeTruthy();
+    }
+    await waitFor(() => expect(window.localStorage.getItem(STORAGE_KEY)).toContain("nvidia.com"));
   });
 });

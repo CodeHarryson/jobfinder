@@ -8,3 +8,4 @@ coverage/
 .env.*.local
 .DS_Store
 npm-debug.log*
+data/*.sqlite*
