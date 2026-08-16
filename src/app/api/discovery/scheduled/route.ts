@@ -1,0 +1,31 @@
+import { NextResponse } from "next/server";
+import { cronMatches } from "@/discovery/cron";
+import { runDiscoveryScan } from "@/discovery/run-discovery-scan";
+import { getRepository } from "@/storage/jobfinder-repository";
+
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
+export async function GET(request: Request) {
+  const secret = process.env.CRON_SECRET;
+  if (secret && request.headers.get("authorization") !== `Bearer ${secret}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (!secret && process.env.NODE_ENV === "production") {
+    return NextResponse.json({ error: "CRON_SECRET is required in production." }, { status: 503 });
+  }
+
+  const repository = getRepository();
+  const now = new Date();
+  const targets = repository.listTargets().flatMap((target) => {
+    const dueSources = target.sources.filter((source) => source.enabled && cronMatches(source.scanCron, now));
+    return dueSources.length ? [{ ...target, sources: dueSources }] : [];
+  });
+  if (!targets.length) return NextResponse.json({ scannedAt: now.toISOString(), skipped: true, reason: "No sources are due." });
+
+  try {
+    return NextResponse.json(await runDiscoveryScan(repository, targets));
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Scheduled scan failed." }, { status: 500 });
+  }
+}

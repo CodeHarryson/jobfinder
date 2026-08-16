@@ -53,7 +53,9 @@ Open `http://localhost:3000`. The current foundation includes the release-one da
 
 The first discovery pipeline is operational through **Scan now**. It fetches configured career and early-career pages server-side, extracts schema.org job postings, ordinary job links, and common embedded application-state records, filters them by the company role keywords, and deduplicates canonical URLs. Targets, sources, opportunities, and scan history are persisted in a local SQLite database at `data/jobfinder.sqlite`; existing browser-stored targets are migrated automatically on first load, with browser storage retained as an offline fallback.
 
-SQLite is the local-development persistence adapter. A production deployment should point the same repository boundary at a durable hosted database before scheduled workers are enabled. Scheduled scans, notifications, rendered-browser fallback, and event extraction remain upcoming stages.
+SQLite is the local-development persistence adapter. A production deployment should point the same repository boundary at a durable hosted database. The protected `GET /api/discovery/scheduled` endpoint is designed for a one-minute scheduler heartbeat; it evaluates each source's five-field UTC cron expression and scans only sources due in that minute. Set `CRON_SECRET` in production and send it as a bearer token. New and materially updated postings are recorded as notification candidates and exposed by `GET /api/notifications?unread=true`.
+
+Outbound notification delivery, rendered-browser fallback, and event extraction remain upcoming stages.
 
 Validation commands:
 

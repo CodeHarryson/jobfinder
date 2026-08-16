@@ -10,6 +10,7 @@ type JobRow = {
   title: string; description: string; locations: string; employment_type: string; first_seen_at: string; last_seen_at: string;
   content_fingerprint: string; extraction_confidence: number;
 };
+export type DiscoveryChange = { id: string; jobId: string; companyId: string; kind: "NEW" | "UPDATED"; createdAt: string; readAt: string | null };
 
 export class JobFinderRepository {
   private readonly db: DatabaseSync;
@@ -42,6 +43,12 @@ export class JobFinderRepository {
       CREATE TABLE IF NOT EXISTS scan_runs (
         id TEXT PRIMARY KEY, started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
         target_count INTEGER NOT NULL, job_count INTEGER NOT NULL, failure_count INTEGER NOT NULL, failures TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS discovery_changes (
+        id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,
+        company_id TEXT NOT NULL REFERENCES target_companies(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL, created_at TEXT NOT NULL, read_at TEXT,
+        UNIQUE(job_id, kind, created_at)
       );
       CREATE INDEX IF NOT EXISTS job_postings_last_seen_idx ON job_postings(last_seen_at DESC);
     `);
@@ -97,7 +104,7 @@ export class JobFinderRepository {
     }));
   }
 
-  saveJobs(jobs: JobPosting[]): JobPosting[] {
+  saveJobs(jobs: JobPosting[]): DiscoveryChange[] {
     const statement = this.db.prepare(`INSERT INTO job_postings(
       id,company_id,source_id,source_url,canonical_url,application_url,title,description,locations,employment_type,
       first_seen_at,last_seen_at,content_fingerprint,extraction_confidence) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -105,11 +112,39 @@ export class JobFinderRepository {
       application_url=excluded.application_url,title=excluded.title,description=excluded.description,locations=excluded.locations,
       employment_type=excluded.employment_type,last_seen_at=excluded.last_seen_at,content_fingerprint=excluded.content_fingerprint,
       extraction_confidence=excluded.extraction_confidence`);
-    for (const job of jobs) statement.run(
-      job.id, job.companyId, job.sourceId, job.sourceUrl, job.canonicalUrl, job.applicationUrl, job.title, job.description,
-      JSON.stringify(job.locations), job.employmentType, job.firstSeenAt, job.lastSeenAt, job.contentFingerprint, job.extractionConfidence,
-    );
-    return jobs;
+    const find = this.db.prepare("SELECT id, content_fingerprint FROM job_postings WHERE company_id = ? AND canonical_url = ?");
+    const insertChange = this.db.prepare("INSERT INTO discovery_changes(id,job_id,company_id,kind,created_at,read_at) VALUES(?,?,?,?,?,NULL)");
+    const changes: DiscoveryChange[] = [];
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const job of jobs) {
+        const existing = find.get(job.companyId, job.canonicalUrl) as { id: string; content_fingerprint: string } | undefined;
+        statement.run(job.id, job.companyId, job.sourceId, job.sourceUrl, job.canonicalUrl, job.applicationUrl, job.title, job.description,
+          JSON.stringify(job.locations), job.employmentType, existing ? this.listJobFirstSeen(existing.id) : job.firstSeenAt, job.lastSeenAt, job.contentFingerprint, job.extractionConfidence);
+        const kind = !existing ? "NEW" : existing.content_fingerprint !== job.contentFingerprint ? "UPDATED" : null;
+        if (kind) {
+          const change = { id: crypto.randomUUID(), jobId: existing?.id ?? job.id, companyId: job.companyId, kind, createdAt: job.lastSeenAt, readAt: null } satisfies DiscoveryChange;
+          insertChange.run(change.id, change.jobId, change.companyId, change.kind, change.createdAt);
+          changes.push(change);
+        }
+      }
+      this.db.exec("COMMIT");
+      return changes;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private listJobFirstSeen(id: string): string {
+    return (this.db.prepare("SELECT first_seen_at FROM job_postings WHERE id = ?").get(id) as { first_seen_at: string }).first_seen_at;
+  }
+
+  listDiscoveryChanges(unreadOnly = false): DiscoveryChange[] {
+    const where = unreadOnly ? "WHERE read_at IS NULL" : "";
+    return (this.db.prepare(`SELECT id,job_id,company_id,kind,created_at,read_at FROM discovery_changes ${where} ORDER BY created_at DESC`).all() as Array<{ id: string; job_id: string; company_id: string; kind: string; created_at: string; read_at: string | null }>).map((row) => ({
+      id: row.id, jobId: row.job_id, companyId: row.company_id, kind: row.kind as DiscoveryChange["kind"], createdAt: row.created_at, readAt: row.read_at,
+    }));
   }
 
   recordScan(input: { startedAt: string; finishedAt: string; targetCount: number; jobCount: number; failures: unknown[] }) {

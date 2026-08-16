@@ -1,4 +1,5 @@
 import type { SourceKind, TargetCompany, TargetSource } from "./opportunity.ts";
+import { isValidCron } from "../discovery/cron.ts";
 
 export type TargetCompanyInput = {
   name: string;
@@ -61,6 +62,7 @@ export function createTargetCompany(input: TargetCompanyInput): ValidationResult
 
   const id = crypto.randomUUID();
   const scanCron = input.scanCron?.trim() || DEFAULT_CRON;
+  if (!isValidCron(scanCron)) return { ok: false, errors: ["Scan schedule must be a valid five-field cron expression."] };
   const sources: TargetSource[] = parsedSources.map((source) => ({
     id: crypto.randomUUID(),
     kind: source.kind,

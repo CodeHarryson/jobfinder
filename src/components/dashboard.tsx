@@ -109,11 +109,13 @@ export function Dashboard() {
       if (!response.ok || !payload || typeof payload !== "object" || !Array.isArray((payload as { jobs?: unknown }).jobs)) {
         throw new Error((payload as { error?: string } | null)?.error ?? "The scan could not be completed.");
       }
-      const result = payload as { jobs: JobPosting[]; failures?: Array<{ message: string }> };
+      const result = payload as { jobs: JobPosting[]; failures?: Array<{ message: string }>; changes?: Array<{ kind: "NEW" | "UPDATED" }> };
       setJobs((current) => [...new Map([...result.jobs, ...current].map((job) => [`${job.companyId}:${job.canonicalUrl}`, job])).values()]);
       const failureCount = result.failures?.length ?? 0;
       setScanState("success");
-      setScanMessage(`Found ${result.jobs.length} matching ${result.jobs.length === 1 ? "role" : "roles"}${failureCount ? ` · ${failureCount} source ${failureCount === 1 ? "failed" : "failures"}` : ""}`);
+      const newCount = result.changes?.filter(({ kind }) => kind === "NEW").length ?? 0;
+      const updatedCount = result.changes?.filter(({ kind }) => kind === "UPDATED").length ?? 0;
+      setScanMessage(`Found ${result.jobs.length} matching ${result.jobs.length === 1 ? "role" : "roles"} · ${newCount} new · ${updatedCount} updated${failureCount ? ` · ${failureCount} source ${failureCount === 1 ? "failed" : "failures"}` : ""}`);
       setView("opportunities");
     } catch (error) {
       setScanState("error");
@@ -150,6 +152,7 @@ export function Dashboard() {
       priority: String(form.get("priority")) as TargetCompany["priority"],
       roleKeywords: String(form.get("roleKeywords") ?? "").split(","),
       eventKeywords: String(form.get("eventKeywords") ?? "").split(","),
+      scanCron: String(form.get("scanCron") ?? "* * * * *"),
     };
     const result = editingTarget ? updateTargetCompany(editingTarget, input) : createTargetCompany(input);
 
@@ -208,7 +211,7 @@ export function Dashboard() {
             </button>
           ))}
         </nav>
-        <div className={`scanStatus ${scanState}`}><span className={`pulse ${scanState}`} />{scanState === "scanning" ? "Scanning sources" : "Manual discovery"}<br/><small>{scanMessage}</small><button onClick={scanNow} disabled={!targets.length || scanState === "scanning"}>{scanState === "scanning" ? "Scanning…" : "Scan now"}</button></div>
+        <div className={`scanStatus ${scanState}`}><span className={`pulse ${scanState}`} />{scanState === "scanning" ? "Scanning sources" : "Discovery monitor"}<br/><small>{scanMessage}</small><button onClick={scanNow} disabled={!targets.length || scanState === "scanning"}>{scanState === "scanning" ? "Scanning…" : "Scan now"}</button></div>
       </aside>
 
       <section className="content">
@@ -258,7 +261,7 @@ function TargetsView({ targets, showForm, editingTarget, errors, onAddPreset, on
     {showForm && <TargetForm key={editingTarget?.id ?? "new"} target={editingTarget} errors={errors} onSubmit={onSubmit} onCancel={onHideForm} />}
     <section className="panel">
       <div className="panelTitle"><div><p className="eyebrow">Active watchlist</p><h2>{targets.length} {targets.length === 1 ? "company" : "companies"}</h2></div><span className="badge">ATS agnostic</span></div>
-      {targets.length ? <div className="targetList">{targets.map((target) => <article className="target" key={target.id}><div className="companyIcon">{target.name.slice(0, 2).toUpperCase()}</div><div className="targetMain"><h3>{target.name}</h3><p>{target.domain} · {target.priority.toLowerCase()} priority</p><div className="tags">{[...target.roleKeywords, ...target.eventKeywords].slice(0, 5).map((tag) => <span key={tag}>{tag}</span>)}</div></div><div className="targetActions"><div className="sourceStack">{target.sources.map((source) => <span key={source.id}><i className={source.enabled ? "online" : ""}/>{source.kind.replace("_", " ").toLowerCase()}</span>)}</div><div><button className="editButton" onClick={() => onEdit(target)} aria-label={`Edit ${target.name}`}>Edit</button><button className="removeButton" onClick={() => onRemove(target.id)} aria-label={`Stop watching ${target.name}`}>Remove</button></div></div></article>)}</div> : <div className="emptyState"><h3>No watched companies</h3><p>Add a company and its careers page to begin.</p><button className="primary" onClick={onShowForm}>Add your first company</button></div>}
+      {targets.length ? <div className="targetList">{targets.map((target) => <article className="target" key={target.id}><div className="companyIcon">{target.name.slice(0, 2).toUpperCase()}</div><div className="targetMain"><h3>{target.name}</h3><p>{target.domain} · {target.priority.toLowerCase()} priority</p><div className="tags">{[...target.roleKeywords, ...target.eventKeywords].slice(0, 5).map((tag) => <span key={tag}>{tag}</span>)}</div></div><div className="targetActions"><div className="sourceStack">{target.sources.map((source) => <span key={source.id}><i className={source.enabled ? "online" : ""}/>{source.kind.replace("_", " ").toLowerCase()} · {source.scanCron}</span>)}</div><div><button className="editButton" onClick={() => onEdit(target)} aria-label={`Edit ${target.name}`}>Edit</button><button className="removeButton" onClick={() => onRemove(target.id)} aria-label={`Stop watching ${target.name}`}>Remove</button></div></div></article>)}</div> : <div className="emptyState"><h3>No watched companies</h3><p>Add a company and its careers page to begin.</p><button className="primary" onClick={onShowForm}>Add your first company</button></div>}
     </section>
   </>;
 }
@@ -274,6 +277,7 @@ function TargetForm({ target, errors, onSubmit, onCancel }: { target: TargetComp
       <label>Early-careers URL <span>optional</span><input name="earlyCareersUrl" type="url" placeholder="https://acme.com/students" defaultValue={sourceUrl("EARLY_CAREERS")} /></label><label>Events URL <span>optional</span><input name="eventsUrl" type="url" placeholder="https://acme.com/events" defaultValue={sourceUrl("EVENTS")} /></label>
       <label>Role keywords<input name="roleKeywords" placeholder="intern, new grad, software" defaultValue={target?.roleKeywords.join(", ")} /></label><label>Event keywords<input name="eventKeywords" placeholder="university, hackathon" defaultValue={target?.eventKeywords.join(", ")} /></label>
       <label>Priority<select name="priority" defaultValue={target?.priority ?? "MEDIUM"}><option>HIGH</option><option>MEDIUM</option><option>LOW</option></select></label>
+      <label>Scan schedule <span>UTC cron</span><input name="scanCron" aria-label="Scan schedule" defaultValue={target?.sources[0]?.scanCron ?? "* * * * *"} placeholder="* * * * *" /></label>
     </div><div className="formActions"><button type="button" className="ghost" onClick={onCancel}>Cancel</button><button className="primary" type="submit">{target ? "Save changes" : "Start watching"}</button></div>
   </form>;
 }

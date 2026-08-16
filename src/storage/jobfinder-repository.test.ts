@@ -35,9 +35,11 @@ test("upserts discovered jobs by company and canonical URL", () => {
     title: "Software Intern", description: "First", locations: [], employmentType: "INTERNSHIP",
     firstSeenAt: "2026-08-16T00:00:00.000Z", lastSeenAt: "2026-08-16T00:00:00.000Z", contentFingerprint: "one", extractionConfidence: 0.7,
   };
-  repository.saveJobs([job]);
-  repository.saveJobs([{ ...job, title: "Software Engineering Intern", description: "Updated", lastSeenAt: "2026-08-16T01:00:00.000Z" }]);
+  assert.equal(repository.saveJobs([job])[0].kind, "NEW");
+  assert.equal(repository.saveJobs([job]).length, 0);
+  assert.equal(repository.saveJobs([{ ...job, title: "Software Engineering Intern", description: "Updated", contentFingerprint: "two", lastSeenAt: "2026-08-16T01:00:00.000Z" }])[0].kind, "UPDATED");
   assert.equal(repository.listJobs().length, 1);
   assert.equal(repository.listJobs()[0].title, "Software Engineering Intern");
+  assert.deepEqual(repository.listDiscoveryChanges().map(({ kind }) => kind), ["UPDATED", "NEW"]);
   repository.close();
 });
