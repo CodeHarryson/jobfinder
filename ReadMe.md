@@ -57,6 +57,8 @@ SQLite is the local-development persistence adapter. A production deployment sho
 
 Outbound notification delivery, rendered-browser fallback, and event extraction remain upcoming stages.
 
+The in-app notification inbox is available from the dashboard. It shows unread counts and enriched job/company details, and supports marking one or all notifications read and dismissing individual items. Outbound email requires provisioning a messaging integration; this repository does not install an unconfigured provider SDK or store placeholder credentials.
+
 Validation commands:
 
 ```bash

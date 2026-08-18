@@ -41,5 +41,13 @@ test("upserts discovered jobs by company and canonical URL", () => {
   assert.equal(repository.listJobs().length, 1);
   assert.equal(repository.listJobs()[0].title, "Software Engineering Intern");
   assert.deepEqual(repository.listDiscoveryChanges().map(({ kind }) => kind), ["UPDATED", "NEW"]);
+  const notifications = repository.listNotifications();
+  assert.equal(notifications[0].companyName, "Notion");
+  assert.equal(notifications[0].jobTitle, "Software Engineering Intern");
+  assert.equal(repository.markNotificationRead(notifications[0].id), true);
+  assert.equal(repository.listNotifications(true).length, 1);
+  assert.equal(repository.markAllNotificationsRead(), 1);
+  assert.equal(repository.listNotifications(true).length, 0);
+  assert.equal(repository.deleteNotification(notifications[0].id), true);
   repository.close();
 });

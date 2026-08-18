@@ -5,7 +5,8 @@ import { createTargetCompany, updateTargetCompany } from "@/domain/target-compan
 import { STARTER_PRESETS, type CompanyPreset } from "@/domain/company-presets";
 import type { JobPosting, TargetCompany } from "@/domain/opportunity";
 
-type View = "overview" | "opportunities" | "events" | "applications" | "targets";
+type View = "overview" | "notifications" | "opportunities" | "events" | "applications" | "targets";
+type NotificationItem = { id: string; jobId: string; companyId: string; kind: "NEW" | "UPDATED"; createdAt: string; readAt: string | null; companyName: string; jobTitle: string; applicationUrl: string };
 const STORAGE_KEY = "jobfinder.target-companies.v1";
 const JOBS_STORAGE_KEY = "jobfinder.opportunities.v1";
 
@@ -25,6 +26,7 @@ const demoTargets: TargetCompany[] = [{
 
 const navItems: Array<{ id: View; label: string }> = [
   { id: "overview", label: "Overview" },
+  { id: "notifications", label: "Notifications" },
   { id: "opportunities", label: "Opportunities" },
   { id: "events", label: "Early-career events" },
   { id: "applications", label: "Applications" },
@@ -55,6 +57,7 @@ export function Dashboard() {
   const [view, setView] = useState<View>("overview");
   const [targets, setTargets] = useState(demoTargets);
   const [jobs, setJobs] = useState<JobPosting[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [storageReady, setStorageReady] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const [showForm, setShowForm] = useState(false);
@@ -73,7 +76,7 @@ export function Dashboard() {
     setStorageReady(true);
     void (async () => {
       try {
-        const [targetResponse, jobResponse] = await Promise.all([fetch("/api/targets"), fetch("/api/opportunities")]);
+        const [targetResponse, jobResponse, notificationResponse] = await Promise.all([fetch("/api/targets"), fetch("/api/opportunities"), fetch("/api/notifications")]);
         if (targetResponse.ok) {
           const payload = await targetResponse.json() as { targets?: TargetCompany[] };
           if (payload.targets?.length) setTargets(payload.targets);
@@ -82,6 +85,10 @@ export function Dashboard() {
         if (jobResponse.ok) {
           const payload = await jobResponse.json() as { jobs?: JobPosting[] };
           if (payload.jobs?.length) setJobs(payload.jobs);
+        }
+        if (notificationResponse.ok) {
+          const payload = await notificationResponse.json() as { notifications?: NotificationItem[] };
+          if (payload.notifications) setNotifications(payload.notifications);
         }
       } catch {
         // Local storage remains an offline fallback while the server is unavailable.
@@ -116,6 +123,10 @@ export function Dashboard() {
       const newCount = result.changes?.filter(({ kind }) => kind === "NEW").length ?? 0;
       const updatedCount = result.changes?.filter(({ kind }) => kind === "UPDATED").length ?? 0;
       setScanMessage(`Found ${result.jobs.length} matching ${result.jobs.length === 1 ? "role" : "roles"} · ${newCount} new · ${updatedCount} updated${failureCount ? ` · ${failureCount} source ${failureCount === 1 ? "failed" : "failures"}` : ""}`);
+      if (newCount + updatedCount > 0) {
+        const notificationResponse = await fetch("/api/notifications");
+        if (notificationResponse.ok) setNotifications((await notificationResponse.json() as { notifications: NotificationItem[] }).notifications);
+      }
       setView("opportunities");
     } catch (error) {
       setScanState("error");
@@ -198,6 +209,22 @@ export function Dashboard() {
     setEditingTarget(null);
   }
 
+  async function markNotificationRead(id: string) {
+    setNotifications((current) => current.map((item) => item.id === id ? { ...item, readAt: item.readAt ?? new Date().toISOString() } : item));
+    await fetch(`/api/notifications/${id}`, { method: "PATCH" }).catch(() => undefined);
+  }
+
+  async function markAllNotificationsRead() {
+    const readAt = new Date().toISOString();
+    setNotifications((current) => current.map((item) => ({ ...item, readAt: item.readAt ?? readAt })));
+    await fetch("/api/notifications", { method: "PATCH" }).catch(() => undefined);
+  }
+
+  async function dismissNotification(id: string) {
+    setNotifications((current) => current.filter((item) => item.id !== id));
+    await fetch(`/api/notifications/${id}`, { method: "DELETE" }).catch(() => undefined);
+  }
+
   return (
     <main>
       <aside className="sidebar">
@@ -207,6 +234,7 @@ export function Dashboard() {
             <button className={view === item.id ? "active" : ""} key={item.id} onClick={() => navigate(item.id)} aria-current={view === item.id ? "page" : undefined} aria-label={item.label}>
               {item.label}
               {item.id === "opportunities" && <span className="count">{jobs.length}</span>}
+              {item.id === "notifications" && notifications.some(({ readAt }) => !readAt) && <span className="count">{notifications.filter(({ readAt }) => !readAt).length}</span>}
               {item.id === "events" && <span className="count">0</span>}
             </button>
           ))}
@@ -216,6 +244,7 @@ export function Dashboard() {
 
       <section className="content">
         {view === "overview" && <Overview targets={targets} sourceCount={sourceCount} jobs={jobs} onAdd={openAddCompany} onScan={scanNow} scanState={scanState} onViewTargets={() => navigate("targets")} />}
+        {view === "notifications" && <NotificationsView notifications={notifications} onRead={markNotificationRead} onReadAll={markAllNotificationsRead} onDismiss={dismissNotification} />}
         {view === "targets" && <TargetsView targets={targets} showForm={showForm} editingTarget={editingTarget} errors={errors} onAddPreset={addPreset} onShowForm={() => { setEditingTarget(null); setShowForm(true); }} onHideForm={() => { setShowForm(false); setEditingTarget(null); setErrors([]); }} onSubmit={addTarget} onEdit={editTarget} onRemove={removeTarget} />}
         {view === "opportunities" && <OpportunitiesView jobs={jobs} targets={targets} scanState={scanState} scanMessage={scanMessage} onScan={scanNow} />}
         {view === "events" && <EmptyView eyebrow="Early-career calendar" title="Events" body="Information sessions, university events, workshops, hackathons, and registration deadlines will appear here." action="Manage event sources" onAction={() => navigate("targets")} />}
@@ -223,6 +252,18 @@ export function Dashboard() {
       </section>
     </main>
   );
+}
+
+function NotificationsView({ notifications, onRead, onReadAll, onDismiss }: { notifications: NotificationItem[]; onRead: (id: string) => void; onReadAll: () => void; onDismiss: (id: string) => void }) {
+  const unreadCount = notifications.filter(({ readAt }) => !readAt).length;
+  return <>
+    <header><div><p className="eyebrow">Discovery inbox</p><h1>Notifications</h1><p className="lede">New and materially updated roles from scheduled and manual scans.</p></div>{unreadCount > 0 && <button className="ghost" onClick={onReadAll}>Mark all read</button>}</header>
+    {notifications.length ? <section className="panel notificationList">{notifications.map((item) => <article className={`notification ${item.readAt ? "read" : "unread"}`} key={item.id}>
+      <span className={`changeBadge ${item.kind.toLowerCase()}`}>{item.kind === "NEW" ? "New role" : "Updated"}</span>
+      <div><p className="eyebrow">{item.companyName}</p><h2>{item.jobTitle}</h2><p>{new Date(item.createdAt).toLocaleString()}</p></div>
+      <div className="notificationActions">{!item.readAt && <button className="textButton" onClick={() => onRead(item.id)}>Mark read</button>}<a href={item.applicationUrl} onClick={() => onRead(item.id)} target="_blank" rel="noreferrer">View role ↗</a><button className="removeButton" onClick={() => onDismiss(item.id)}>Dismiss</button></div>
+    </article>)}</section> : <section className="panel emptyState"><div className="emptyGlyph">✓</div><h2>You’re all caught up</h2><p>New and changed roles will appear here after discovery scans.</p></section>}
+  </>;
 }
 
 function Overview({ targets, sourceCount, jobs, onAdd, onScan, scanState, onViewTargets }: { targets: TargetCompany[]; sourceCount: number; jobs: JobPosting[]; onAdd: () => void; onScan: () => void; scanState: string; onViewTargets: () => void }) {

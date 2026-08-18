@@ -99,6 +99,28 @@ describe("Dashboard navigation and watched companies", () => {
     await waitFor(() => expect(window.localStorage.getItem("jobfinder.opportunities.v1")).toContain("Software Engineering Intern"));
   });
 
+  test("shows unread discovery notifications and supports read and dismiss actions", async () => {
+    const notification = {
+      id: "notice-1", jobId: "job-1", companyId: "demo-1", kind: "NEW", createdAt: "2026-08-17T00:00:00.000Z",
+      readAt: null, companyName: "Northstar Labs", jobTitle: "Software Engineering Intern", applicationUrl: "https://northstar.example/jobs/intern",
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      const payload = url === "/api/targets" ? { targets: [] } : url === "/api/opportunities" ? { jobs: [] } : url === "/api/notifications" ? { notifications: [notification] } : {};
+      return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
+    });
+    const user = userEvent.setup();
+    render(<Dashboard />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Notifications" }).textContent).toContain("1"));
+    await user.click(screen.getByRole("button", { name: "Notifications" }));
+    expect(screen.getByRole("heading", { level: 2, name: "Software Engineering Intern" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Mark read" }));
+    expect(screen.queryByRole("button", { name: "Mark read" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.getByRole("heading", { level: 2, name: "You’re all caught up" })).toBeTruthy();
+  });
+
   test("adds the MAANGO starter watchlist without duplicates", async () => {
     const user = userEvent.setup();
     render(<Dashboard />);

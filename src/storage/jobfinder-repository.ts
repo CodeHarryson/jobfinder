@@ -11,6 +11,7 @@ type JobRow = {
   content_fingerprint: string; extraction_confidence: number;
 };
 export type DiscoveryChange = { id: string; jobId: string; companyId: string; kind: "NEW" | "UPDATED"; createdAt: string; readAt: string | null };
+export type NotificationItem = DiscoveryChange & { companyName: string; jobTitle: string; applicationUrl: string };
 
 export class JobFinderRepository {
   private readonly db: DatabaseSync;
@@ -145,6 +146,29 @@ export class JobFinderRepository {
     return (this.db.prepare(`SELECT id,job_id,company_id,kind,created_at,read_at FROM discovery_changes ${where} ORDER BY created_at DESC`).all() as Array<{ id: string; job_id: string; company_id: string; kind: string; created_at: string; read_at: string | null }>).map((row) => ({
       id: row.id, jobId: row.job_id, companyId: row.company_id, kind: row.kind as DiscoveryChange["kind"], createdAt: row.created_at, readAt: row.read_at,
     }));
+  }
+
+  listNotifications(unreadOnly = false): NotificationItem[] {
+    const where = unreadOnly ? "WHERE dc.read_at IS NULL" : "";
+    return (this.db.prepare(`SELECT dc.id,dc.job_id,dc.company_id,dc.kind,dc.created_at,dc.read_at,
+      tc.name AS company_name,jp.title AS job_title,jp.application_url
+      FROM discovery_changes dc JOIN target_companies tc ON tc.id=dc.company_id JOIN job_postings jp ON jp.id=dc.job_id
+      ${where} ORDER BY dc.created_at DESC`).all() as Array<{ id: string; job_id: string; company_id: string; kind: string; created_at: string; read_at: string | null; company_name: string; job_title: string; application_url: string }>).map((row) => ({
+      id: row.id, jobId: row.job_id, companyId: row.company_id, kind: row.kind as DiscoveryChange["kind"], createdAt: row.created_at,
+      readAt: row.read_at, companyName: row.company_name, jobTitle: row.job_title, applicationUrl: row.application_url,
+    }));
+  }
+
+  markNotificationRead(id: string): boolean {
+    return Number(this.db.prepare("UPDATE discovery_changes SET read_at=COALESCE(read_at,?) WHERE id=?").run(new Date().toISOString(), id).changes) > 0;
+  }
+
+  markAllNotificationsRead(): number {
+    return Number(this.db.prepare("UPDATE discovery_changes SET read_at=? WHERE read_at IS NULL").run(new Date().toISOString()).changes);
+  }
+
+  deleteNotification(id: string): boolean {
+    return Number(this.db.prepare("DELETE FROM discovery_changes WHERE id=?").run(id).changes) > 0;
   }
 
   recordScan(input: { startedAt: string; finishedAt: string; targetCount: number; jobCount: number; failures: unknown[] }) {
