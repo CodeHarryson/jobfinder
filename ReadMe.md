@@ -59,6 +59,8 @@ Outbound notification delivery, rendered-browser fallback, and event extraction 
 
 The in-app notification inbox is available from the dashboard. It shows unread counts and enriched job/company details, and supports marking one or all notifications read and dismissing individual items. Outbound email requires provisioning a messaging integration; this repository does not install an unconfigured provider SDK or store placeholder credentials.
 
+Discord is the primary out-of-app delivery channel. Set `DISCORD_WEBHOOK_URL` as a server-only Vercel environment variable. New and materially updated roles are queued in a durable outbox, sent as rich Discord embeds, deduplicated by notification and channel, and retried with exponential backoff after transient failures. The Vercel Hobby-compatible cron runs daily at 13:00 UTC; Pro deployments can change `vercel.json` to `* * * * *` for one-minute discovery.
+
 Validation commands:
 
 ```bash

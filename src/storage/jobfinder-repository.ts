@@ -12,6 +12,7 @@ type JobRow = {
 };
 export type DiscoveryChange = { id: string; jobId: string; companyId: string; kind: "NEW" | "UPDATED"; createdAt: string; readAt: string | null };
 export type NotificationItem = DiscoveryChange & { companyName: string; jobTitle: string; applicationUrl: string };
+export type NotificationDelivery = { id: string; notification: NotificationItem; attempts: number };
 
 export class JobFinderRepository {
   private readonly db: DatabaseSync;
@@ -50,6 +51,12 @@ export class JobFinderRepository {
         company_id TEXT NOT NULL REFERENCES target_companies(id) ON DELETE CASCADE,
         kind TEXT NOT NULL, created_at TEXT NOT NULL, read_at TEXT,
         UNIQUE(job_id, kind, created_at)
+      );
+      CREATE TABLE IF NOT EXISTS notification_deliveries (
+        id TEXT PRIMARY KEY, change_id TEXT NOT NULL REFERENCES discovery_changes(id) ON DELETE CASCADE,
+        channel TEXT NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_at TEXT NOT NULL, last_error TEXT, external_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(change_id, channel)
       );
       CREATE INDEX IF NOT EXISTS job_postings_last_seen_idx ON job_postings(last_seen_at DESC);
     `);
@@ -169,6 +176,43 @@ export class JobFinderRepository {
 
   deleteNotification(id: string): boolean {
     return Number(this.db.prepare("DELETE FROM discovery_changes WHERE id=?").run(id).changes) > 0;
+  }
+
+  enqueueDiscordDeliveries(changes: DiscoveryChange[]): number {
+    const statement = this.db.prepare(`INSERT INTO notification_deliveries(id,change_id,channel,status,attempts,next_attempt_at,created_at,updated_at)
+      VALUES(?,?,'DISCORD','PENDING',0,?,?,?) ON CONFLICT(change_id,channel) DO NOTHING`);
+    let created = 0;
+    for (const change of changes) {
+      const now = new Date().toISOString();
+      created += Number(statement.run(crypto.randomUUID(), change.id, now, now, now).changes);
+    }
+    return created;
+  }
+
+  claimDiscordDeliveries(limit = 10, now = new Date()): NotificationDelivery[] {
+    const rows = this.db.prepare(`SELECT nd.id,nd.attempts,dc.id AS change_id,dc.job_id,dc.company_id,dc.kind,dc.created_at,dc.read_at,
+      tc.name AS company_name,jp.title AS job_title,jp.application_url
+      FROM notification_deliveries nd JOIN discovery_changes dc ON dc.id=nd.change_id
+      JOIN target_companies tc ON tc.id=dc.company_id JOIN job_postings jp ON jp.id=dc.job_id
+      WHERE nd.channel='DISCORD' AND nd.status IN ('PENDING','FAILED') AND nd.next_attempt_at<=? ORDER BY nd.created_at LIMIT ?`).all(now.toISOString(), limit) as Array<{ id: string; attempts: number; change_id: string; job_id: string; company_id: string; kind: string; created_at: string; read_at: string | null; company_name: string; job_title: string; application_url: string }>;
+    const claim = this.db.prepare("UPDATE notification_deliveries SET status='SENDING',attempts=attempts+1,updated_at=? WHERE id=? AND status IN ('PENDING','FAILED')");
+    return rows.flatMap((row) => Number(claim.run(now.toISOString(), row.id).changes) ? [{
+      id: row.id, attempts: row.attempts + 1, notification: { id: row.change_id, jobId: row.job_id, companyId: row.company_id,
+        kind: row.kind as DiscoveryChange["kind"], createdAt: row.created_at, readAt: row.read_at, companyName: row.company_name,
+        jobTitle: row.job_title, applicationUrl: row.application_url },
+    }] : []);
+  }
+
+  completeDiscordDelivery(id: string, externalId: string): void {
+    this.db.prepare("UPDATE notification_deliveries SET status='SENT',external_id=?,last_error=NULL,updated_at=? WHERE id=?")
+      .run(externalId, new Date().toISOString(), id);
+  }
+
+  failDiscordDelivery(id: string, attempts: number, error: string): void {
+    const delays = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000];
+    const nextAttemptAt = new Date(Date.now() + delays[Math.min(attempts - 1, delays.length - 1)]).toISOString();
+    this.db.prepare("UPDATE notification_deliveries SET status='FAILED',next_attempt_at=?,last_error=?,updated_at=? WHERE id=?")
+      .run(nextAttemptAt, error.slice(0, 500), new Date().toISOString(), id);
   }
 
   recordScan(input: { startedAt: string; finishedAt: string; targetCount: number; jobCount: number; failures: unknown[] }) {
