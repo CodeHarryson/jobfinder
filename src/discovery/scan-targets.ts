@@ -7,6 +7,10 @@ import { discoverEightfoldJobs, eightfoldConfig } from "./eightfold.ts";
 export type ScanFailure = { companyId: string; sourceId: string; sourceUrl: string; message: string };
 export type ScanResult = { jobs: JobPosting[]; failures: ScanFailure[]; scannedAt: string; scannedSourceIds: string[] };
 
+export function isUnitedStatesJob(job: Pick<JobPosting, "locations">): boolean {
+  return job.locations.some((location) => /\b(?:United States(?: of America)?|USA|U\.S\.A\.|US)\b/i.test(location));
+}
+
 function isPrivateAddress(address: string): boolean {
   return /^(127\.|10\.|192\.168\.|169\.254\.|0\.|::1$|fc|fd|fe80)/i.test(address)
     || /^172\.(1[6-9]|2\d|3[01])\./.test(address);
@@ -83,6 +87,9 @@ export async function scanTargets(
     }
   }
 
-  const deduplicated = [...new Map(jobs.sort((a, b) => b.extractionConfidence - a.extractionConfidence).map((job) => [`${job.companyId}:${job.canonicalUrl}`, job])).values()];
+  const deduplicated = [...new Map(jobs
+    .filter(isUnitedStatesJob)
+    .sort((a, b) => b.extractionConfidence - a.extractionConfidence)
+    .map((job) => [`${job.companyId}:${job.canonicalUrl}`, job])).values()];
   return { jobs: deduplicated, failures, scannedAt, scannedSourceIds };
 }

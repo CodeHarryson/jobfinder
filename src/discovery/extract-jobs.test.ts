@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { extractJobs } from "./extract-jobs.ts";
-import { scanTargets } from "./scan-targets.ts";
+import { isUnitedStatesJob, scanTargets } from "./scan-targets.ts";
 import type { TargetCompany } from "../domain/opportunity.ts";
 
 const target: TargetCompany = {
@@ -33,7 +33,15 @@ test("continues scanning other sources when one source fails", async () => {
     return html;
   });
   assert.equal(result.failures.length, 1);
-  assert.equal(result.jobs.length, 3);
+  assert.equal(result.jobs.length, 1);
+});
+
+test("keeps explicitly US-located jobs and rejects international or unknown locations", () => {
+  assert.equal(isUnitedStatesJob({ locations: ["Redmond, WA, US"] }), true);
+  assert.equal(isUnitedStatesJob({ locations: ["United States, California, Mountain View"] }), true);
+  assert.equal(isUnitedStatesJob({ locations: ["Bengaluru, KA, IN"] }), false);
+  assert.equal(isUnitedStatesJob({ locations: ["Remote"] }), false);
+  assert.equal(isUnitedStatesJob({ locations: [] }), false);
 });
 
 test("rejects substring, recruiting, navigation, media, and search false positives", () => {
