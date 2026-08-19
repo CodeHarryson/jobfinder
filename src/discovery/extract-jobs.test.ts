@@ -35,3 +35,16 @@ test("continues scanning other sources when one source fails", async () => {
   assert.equal(result.failures.length, 1);
   assert.equal(result.jobs.length, 3);
 });
+
+test("rejects substring, recruiting, navigation, media, and search false positives", () => {
+  const noisy = `<!doctype html><html><body>
+    <a href="https://job-boards.greenhouse.io/acme/jobs/123456">Director, US International Tax</a>
+    <a href="https://job-boards.greenhouse.io/acme/jobs/123457">Internal Communications Manager</a>
+    <a href="https://jobs.ashbyhq.com/acme/12345678-1234-1234-1234-123456789abc">Technical Recruiter, Early Career</a>
+    <a href="https://example.com/career-programs/university">Explore internships</a>
+    <a href="https://example.com/intern-film.mp4">Watch the film about becoming an intern</a>
+    <a href="https://job-boards.greenhouse.io/acme/jobs/123458">Software Engineer Intern</a>
+  </body></html>`;
+  const jobs = extractJobs(noisy, target.sources[0], target, "2026-08-18T00:00:00.000Z");
+  assert.deepEqual(jobs.map(({ title }) => title), ["Software Engineer Intern"]);
+});

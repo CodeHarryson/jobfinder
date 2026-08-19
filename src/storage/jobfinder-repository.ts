@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { JobPosting, SourceKind, TargetCompany, TargetSource } from "../domain/opportunity.ts";
 
@@ -40,7 +40,8 @@ export class JobFinderRepository {
         source_id TEXT NOT NULL, source_url TEXT NOT NULL, canonical_url TEXT NOT NULL, application_url TEXT NOT NULL,
         title TEXT NOT NULL, description TEXT NOT NULL, locations TEXT NOT NULL, employment_type TEXT NOT NULL,
         first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, content_fingerprint TEXT NOT NULL,
-        extraction_confidence REAL NOT NULL, UNIQUE(company_id, canonical_url)
+        extraction_confidence REAL NOT NULL, active INTEGER NOT NULL DEFAULT 1, missed_scans INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(company_id, canonical_url)
       );
       CREATE TABLE IF NOT EXISTS scan_runs (
         id TEXT PRIMARY KEY, started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
@@ -60,6 +61,9 @@ export class JobFinderRepository {
       );
       CREATE INDEX IF NOT EXISTS job_postings_last_seen_idx ON job_postings(last_seen_at DESC);
     `);
+    const jobColumns = new Set((this.db.prepare("PRAGMA table_info(job_postings)").all() as Array<{ name: string }>).map(({ name }) => name));
+    if (!jobColumns.has("active")) this.db.exec("ALTER TABLE job_postings ADD COLUMN active INTEGER NOT NULL DEFAULT 1");
+    if (!jobColumns.has("missed_scans")) this.db.exec("ALTER TABLE job_postings ADD COLUMN missed_scans INTEGER NOT NULL DEFAULT 0");
   }
 
   listTargets(): TargetCompany[] {
@@ -103,7 +107,7 @@ export class JobFinderRepository {
   }
 
   listJobs(): JobPosting[] {
-    return (this.db.prepare("SELECT * FROM job_postings ORDER BY last_seen_at DESC, title").all() as JobRow[]).map((row) => ({
+    return (this.db.prepare("SELECT * FROM job_postings WHERE active=1 ORDER BY last_seen_at DESC, title").all() as JobRow[]).map((row) => ({
       kind: "JOB", id: row.id, companyId: row.company_id, sourceId: row.source_id, sourceUrl: row.source_url,
       canonicalUrl: row.canonical_url, applicationUrl: row.application_url, title: row.title, description: row.description,
       locations: JSON.parse(row.locations) as string[], employmentType: row.employment_type as JobPosting["employmentType"],
@@ -112,19 +116,25 @@ export class JobFinderRepository {
     }));
   }
 
-  saveJobs(jobs: JobPosting[]): DiscoveryChange[] {
+  saveJobs(jobs: JobPosting[], scannedSourceIds: string[] = []): DiscoveryChange[] {
     const statement = this.db.prepare(`INSERT INTO job_postings(
       id,company_id,source_id,source_url,canonical_url,application_url,title,description,locations,employment_type,
-      first_seen_at,last_seen_at,content_fingerprint,extraction_confidence) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      first_seen_at,last_seen_at,content_fingerprint,extraction_confidence,active,missed_scans) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,0)
       ON CONFLICT(company_id,canonical_url) DO UPDATE SET source_id=excluded.source_id,source_url=excluded.source_url,
       application_url=excluded.application_url,title=excluded.title,description=excluded.description,locations=excluded.locations,
       employment_type=excluded.employment_type,last_seen_at=excluded.last_seen_at,content_fingerprint=excluded.content_fingerprint,
-      extraction_confidence=excluded.extraction_confidence`);
+      extraction_confidence=excluded.extraction_confidence,active=1,missed_scans=0`);
     const find = this.db.prepare("SELECT id, content_fingerprint FROM job_postings WHERE company_id = ? AND canonical_url = ?");
     const insertChange = this.db.prepare("INSERT INTO discovery_changes(id,job_id,company_id,kind,created_at,read_at) VALUES(?,?,?,?,?,NULL)");
     const changes: DiscoveryChange[] = [];
     this.db.exec("BEGIN IMMEDIATE");
     try {
+      for (const sourceId of scannedSourceIds) {
+        const seenUrls = new Set(jobs.filter((job) => job.sourceId === sourceId).map((job) => job.canonicalUrl));
+        const existing = this.db.prepare("SELECT canonical_url FROM job_postings WHERE source_id=? AND active=1").all(sourceId) as Array<{ canonical_url: string }>;
+        const miss = this.db.prepare("UPDATE job_postings SET missed_scans=missed_scans+1,active=CASE WHEN missed_scans+1>=2 THEN 0 ELSE active END WHERE source_id=? AND canonical_url=?");
+        for (const row of existing) if (!seenUrls.has(row.canonical_url)) miss.run(sourceId, row.canonical_url);
+      }
       for (const job of jobs) {
         const existing = find.get(job.companyId, job.canonicalUrl) as { id: string; content_fingerprint: string } | undefined;
         statement.run(job.id, job.companyId, job.sourceId, job.sourceUrl, job.canonicalUrl, job.applicationUrl, job.title, job.description,
@@ -221,11 +231,4 @@ export class JobFinderRepository {
   }
 
   close() { this.db.close(); }
-}
-
-let repository: JobFinderRepository | undefined;
-
-export function getRepository(): JobFinderRepository {
-  repository ??= new JobFinderRepository(process.env.JOBFINDER_DB_PATH || join(process.cwd(), "data", "jobfinder.sqlite"));
-  return repository;
 }

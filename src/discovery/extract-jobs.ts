@@ -35,10 +35,25 @@ function idFor(companyId: string, url: string): string {
 
 function employmentType(title: string, rawType = ""): JobPosting["employmentType"] {
   const text = `${title} ${rawType}`.toLowerCase();
-  if (/intern|co-op|coop/.test(text)) return "INTERNSHIP";
-  if (/new grad|graduate|entry.level|university/.test(text)) return "NEW_GRAD";
-  if (/early career|apprentice|associate/.test(text)) return "EARLY_CAREER";
+  if (/\b(?:intern|internship|co[ -]?op)\b/.test(text)) return "INTERNSHIP";
+  if (/\b(?:new grad(?:uate)?|graduate (?:role|program|engineer)|entry[ -]level)\b/.test(text)) return "NEW_GRAD";
+  if (/\b(?:early career|apprentice|apprenticeship)\b/.test(text)) return "EARLY_CAREER";
   return "OTHER";
+}
+
+const EARLY_CAREER_ROLE = /\b(?:intern|internship|co[ -]?op|new grad(?:uate)?|graduate (?:role|program|engineer)|early career|entry[ -]level|apprentice|apprenticeship)\b/i;
+const HIRING_TEAM_ROLE = /\b(?:recruiter|recruiting|talent acquisition|campus recruiting|university recruiting|program manager)\b/i;
+const NAVIGATION_TITLE = /^(?:early careers?|internships?(?: for students)?|university recruiting|explore |find |view |search jobs?|watch (?:the )?film)/i;
+
+function isEligibleEarlyCareerTitle(title: string): boolean {
+  return EARLY_CAREER_ROLE.test(title) && !HIRING_TEAM_ROLE.test(title) && !NAVIGATION_TITLE.test(title.trim());
+}
+
+function isLikelyJobDetailUrl(value: string): boolean {
+  const url = new URL(value);
+  if (/\.(?:mp4|mov|pdf|jpg|png)$/i.test(url.pathname)) return false;
+  if (/\/(?:search|jobsearch|early-careers?|career-programs|university-recruiting)\/?$/i.test(url.pathname)) return false;
+  return /(?:job-boards\.greenhouse\.io\/.+\/jobs\/\d+|jobs\.ashbyhq\.com\/.+\/[0-9a-f-]{20,}|jobs\.lever\.co\/.+\/[0-9a-f-]{20,}|https?:\/\/jobs\.[^/]+\/.+\/[\w-]{4,}|\/job_details\/\d+|\/details\/\d+|\/jobs?\/[\w-]{4,})/i.test(value);
 }
 
 function locationsFrom(record: JsonRecord): string[] {
@@ -66,9 +81,13 @@ function decodedJsonString(value: string): string {
 }
 
 function matchesTarget(job: Pick<JobPosting, "title" | "description">, target: TargetCompany): boolean {
+  if (!isEligibleEarlyCareerTitle(job.title)) return false;
   if (!target.roleKeywords.length) return true;
   const haystack = `${job.title} ${job.description}`.toLowerCase();
-  return target.roleKeywords.some((keyword) => haystack.includes(keyword.toLowerCase()));
+  return target.roleKeywords.some((keyword) => {
+    const escaped = keyword.trim().toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return escaped ? new RegExp(`(^|\\W)${escaped}(?=\\W|$)`, "i").test(haystack) : false;
+  });
 }
 
 export function extractJobs(html: string, source: TargetSource, target: TargetCompany, observedAt = new Date().toISOString()): JobPosting[] {
@@ -121,7 +140,7 @@ export function extractJobs(html: string, source: TargetSource, target: TargetCo
   for (const match of html.matchAll(adjacentPair)) {
     const title = decodedJsonString(match[1]);
     const href = canonicalUrl(decodedJsonString(match[2]).replaceAll("\\/", "/"), source.url);
-    if (!title || !href || !/(job|career|position|opening|ashbyhq|greenhouse|lever)/i.test(href)) continue;
+    if (!title || !href || !isLikelyJobDetailUrl(href)) continue;
     const job: JobPosting = {
       kind: "JOB", id: idFor(target.id, href), companyId: target.id, sourceId: source.id,
       sourceUrl: source.url, canonicalUrl: href, applicationUrl: href, title, description: "",
@@ -134,7 +153,7 @@ export function extractJobs(html: string, source: TargetSource, target: TargetCo
   $("a[href]").each((_, element) => {
     const title = $(element).text().replace(/\s+/g, " ").trim();
     const href = canonicalUrl($(element).attr("href") ?? "", source.url);
-    if (!title || !href || !/(job|career|position|opening|role|intern|graduate)/i.test(`${title} ${href}`)) return;
+    if (!title || !href || !isLikelyJobDetailUrl(href)) return;
     const job: JobPosting = {
       kind: "JOB", id: idFor(target.id, href), companyId: target.id, sourceId: source.id,
       sourceUrl: source.url, canonicalUrl: href, applicationUrl: href, title, description: "",

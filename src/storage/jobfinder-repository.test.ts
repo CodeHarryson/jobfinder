@@ -49,5 +49,9 @@ test("upserts discovered jobs by company and canonical URL", () => {
   assert.equal(repository.markAllNotificationsRead(), 1);
   assert.equal(repository.listNotifications(true).length, 0);
   assert.equal(repository.deleteNotification(notifications[0].id), true);
+  repository.saveJobs([], [created.value.sources[0].id]);
+  assert.equal(repository.listJobs().length, 1, "one missed scan keeps the role active");
+  repository.saveJobs([], [created.value.sources[0].id]);
+  assert.equal(repository.listJobs().length, 0, "two consecutive missed scans mark the role inactive");
   repository.close();
 });

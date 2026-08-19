@@ -4,7 +4,7 @@ import type { JobPosting, TargetCompany } from "../domain/opportunity.ts";
 import { extractJobs } from "./extract-jobs.ts";
 
 export type ScanFailure = { companyId: string; sourceId: string; sourceUrl: string; message: string };
-export type ScanResult = { jobs: JobPosting[]; failures: ScanFailure[]; scannedAt: string };
+export type ScanResult = { jobs: JobPosting[]; failures: ScanFailure[]; scannedAt: string; scannedSourceIds: string[] };
 
 function isPrivateAddress(address: string): boolean {
   return /^(127\.|10\.|192\.168\.|169\.254\.|0\.|::1$|fc|fd|fe80)/i.test(address)
@@ -46,6 +46,7 @@ export async function scanTargets(targets: TargetCompany[], fetchPage: (url: str
   const scannedAt = new Date().toISOString();
   const jobs: JobPosting[] = [];
   const failures: ScanFailure[] = [];
+  const scannedSourceIds: string[] = [];
 
   for (const target of targets.slice(0, 25)) {
     const sources = target.sources.filter((source) => source.enabled && source.kind !== "EVENTS").slice(0, 5);
@@ -53,6 +54,7 @@ export async function scanTargets(targets: TargetCompany[], fetchPage: (url: str
       try {
         const html = await fetchPage(source.url);
         jobs.push(...extractJobs(html, source, target, scannedAt));
+        scannedSourceIds.push(source.id);
       } catch (error) {
         failures.push({ companyId: target.id, sourceId: source.id, sourceUrl: source.url, message: error instanceof Error ? error.message : "Unknown scan error." });
       }
@@ -60,5 +62,5 @@ export async function scanTargets(targets: TargetCompany[], fetchPage: (url: str
   }
 
   const deduplicated = [...new Map(jobs.sort((a, b) => b.extractionConfidence - a.extractionConfidence).map((job) => [`${job.companyId}:${job.canonicalUrl}`, job])).values()];
-  return { jobs: deduplicated, failures, scannedAt };
+  return { jobs: deduplicated, failures, scannedAt, scannedSourceIds };
 }

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { cronMatches } from "@/discovery/cron";
 import { runDiscoveryScan } from "@/discovery/run-discovery-scan";
-import { getRepository } from "@/storage/jobfinder-repository";
+import { getRepository } from "@/storage/get-repository";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -17,7 +17,7 @@ export async function GET(request: Request) {
 
   const repository = getRepository();
   const now = new Date();
-  const targets = repository.listTargets().flatMap((target) => {
+  const targets = (await repository.listTargets()).flatMap((target) => {
     const dueSources = target.sources.filter((source) => source.enabled && cronMatches(source.scanCron, now));
     return dueSources.length ? [{ ...target, sources: dueSources }] : [];
   });

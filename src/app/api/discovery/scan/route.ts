@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { TargetCompany } from "@/domain/opportunity";
 import { runDiscoveryScan } from "@/discovery/run-discovery-scan";
-import { getRepository } from "@/storage/jobfinder-repository";
+import { getRepository } from "@/storage/get-repository";
 
 export const runtime = "nodejs";
 
@@ -12,10 +12,10 @@ export async function POST(request: Request) {
       ? (body as { targets: TargetCompany[] }).targets
       : [];
     const repository = getRepository();
-    const targets = suppliedTargets.length ? suppliedTargets : repository.listTargets();
+    const targets = suppliedTargets.length ? suppliedTargets : await repository.listTargets();
     if (!targets.length) return NextResponse.json({ error: "No target companies are configured." }, { status: 400 });
     if (targets.length > 25) return NextResponse.json({ error: "A scan is limited to 25 companies." }, { status: 400 });
-    if (suppliedTargets.length) repository.saveTargets(suppliedTargets);
+    if (suppliedTargets.length) await repository.saveTargets(suppliedTargets);
     const result = await runDiscoveryScan(repository, targets);
     return NextResponse.json(result);
   } catch (error) {

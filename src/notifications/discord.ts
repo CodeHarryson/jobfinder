@@ -1,4 +1,5 @@
-import type { DiscoveryChange, JobFinderRepository, NotificationItem } from "../storage/jobfinder-repository.ts";
+import type { DiscoveryChange, NotificationItem } from "../storage/jobfinder-repository.ts";
+import type { Repository } from "../storage/repository.ts";
 
 export function discordPayload(item: NotificationItem) {
   const isNew = item.kind === "NEW";
@@ -20,11 +21,11 @@ export function discordPayload(item: NotificationItem) {
   };
 }
 
-export async function dispatchDiscordNotifications(repository: JobFinderRepository, changes: DiscoveryChange[] = [], fetcher: typeof fetch = fetch) {
+export async function dispatchDiscordNotifications(repository: Repository, changes: DiscoveryChange[] = [], fetcher: typeof fetch = fetch) {
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
   if (!webhookUrl) return { enabled: false, queued: 0, sent: 0, failed: 0 };
-  const queued = repository.enqueueDiscordDeliveries(changes);
-  const deliveries = repository.claimDiscordDeliveries();
+  const queued = await repository.enqueueDiscordDeliveries(changes);
+  const deliveries = await repository.claimDiscordDeliveries();
   let sent = 0;
   let failed = 0;
   for (const delivery of deliveries) {
@@ -35,10 +36,10 @@ export async function dispatchDiscordNotifications(repository: JobFinderReposito
       });
       if (!response.ok) throw new Error(`Discord returned ${response.status}.`);
       const result = await response.json() as { id?: string };
-      repository.completeDiscordDelivery(delivery.id, result.id ?? "accepted");
+      await repository.completeDiscordDelivery(delivery.id, result.id ?? "accepted");
       sent += 1;
     } catch (error) {
-      repository.failDiscordDelivery(delivery.id, delivery.attempts, error instanceof Error ? error.message : "Discord delivery failed.");
+      await repository.failDiscordDelivery(delivery.id, delivery.attempts, error instanceof Error ? error.message : "Discord delivery failed.");
       failed += 1;
     }
   }

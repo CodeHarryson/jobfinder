@@ -172,6 +172,13 @@ export function Dashboard() {
       return;
     }
 
+    const duplicate = targets.find((target) => target.id !== editingTarget?.id
+      && (target.name.toLowerCase() === result.value.name.toLowerCase() || target.domain === result.value.domain));
+    if (duplicate) {
+      setErrors([`${duplicate.name} is already in the watchlist.`]);
+      return;
+    }
+
     setTargets((current) => editingTarget
       ? current.map((target) => target.id === editingTarget.id ? result.value : target)
       : [result.value, ...current]);
@@ -198,8 +205,9 @@ export function Dashboard() {
 
   function addPreset(preset: CompanyPreset) {
     const existingDomains = new Set(targets.map(({ domain }) => domain));
+    const existingNames = new Set(targets.map(({ name }) => name.toLowerCase()));
     const additions = preset.companies
-      .filter(({ domain }) => !existingDomains.has(domain))
+      .filter(({ domain, name }) => !existingDomains.has(domain) && !existingNames.has(name.toLowerCase()))
       .map(createTargetCompany)
       .flatMap((result) => result.ok ? [result.value] : []);
     setTargets((current) => [...additions, ...current]);

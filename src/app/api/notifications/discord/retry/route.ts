@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { dispatchDiscordNotifications } from "@/notifications/discord";
-import { getRepository } from "@/storage/jobfinder-repository";
+import { getRepository } from "@/storage/get-repository";
 
 export const runtime = "nodejs";
 
