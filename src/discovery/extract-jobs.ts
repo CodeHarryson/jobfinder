@@ -25,15 +25,15 @@ function canonicalUrl(value: string, baseUrl: string): string | null {
   }
 }
 
-function fingerprint(...parts: string[]): string {
+export function fingerprint(...parts: string[]): string {
   return createHash("sha256").update(parts.join("\u001f")).digest("hex");
 }
 
-function idFor(companyId: string, url: string): string {
+export function idFor(companyId: string, url: string): string {
   return fingerprint(companyId, url).slice(0, 24);
 }
 
-function employmentType(title: string, rawType = ""): JobPosting["employmentType"] {
+export function employmentType(title: string, rawType = ""): JobPosting["employmentType"] {
   const text = `${title} ${rawType}`.toLowerCase();
   if (/\b(?:intern|internship|co[ -]?op)\b/.test(text)) return "INTERNSHIP";
   if (/\b(?:new grad(?:uate)?|graduate (?:role|program|engineer)|entry[ -]level)\b/.test(text)) return "NEW_GRAD";
@@ -42,7 +42,7 @@ function employmentType(title: string, rawType = ""): JobPosting["employmentType
 }
 
 const EARLY_CAREER_ROLE = /\b(?:intern|internship|co[ -]?op|new grad(?:uate)?|graduate (?:role|program|engineer)|early career|entry[ -]level|apprentice|apprenticeship)\b/i;
-const HIRING_TEAM_ROLE = /\b(?:recruiter|recruiting|talent acquisition|campus recruiting|university recruiting|program manager)\b/i;
+const HIRING_TEAM_ROLE = /\b(?:recruiter|recruiting|talent acquisition|campus recruiting|university recruiting|program manager)\b|\bmanager\b.*\bintern(?:ship)? program\b/i;
 const NAVIGATION_TITLE = /^(?:early careers?|internships?(?: for students)?|university recruiting|explore |find |view |search jobs?|watch (?:the )?film)/i;
 
 function isEligibleEarlyCareerTitle(title: string): boolean {
@@ -80,7 +80,7 @@ function decodedJsonString(value: string): string {
   try { return JSON.parse(value) as string; } catch { return ""; }
 }
 
-function matchesTarget(job: Pick<JobPosting, "title" | "description">, target: TargetCompany): boolean {
+export function matchesTarget(job: Pick<JobPosting, "title" | "description">, target: TargetCompany): boolean {
   if (!isEligibleEarlyCareerTitle(job.title)) return false;
   if (!target.roleKeywords.length) return true;
   const haystack = `${job.title} ${job.description}`.toLowerCase();

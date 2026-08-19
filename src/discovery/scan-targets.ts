@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import { lookup } from "node:dns/promises";
 import type { JobPosting, TargetCompany } from "../domain/opportunity.ts";
 import { extractJobs } from "./extract-jobs.ts";
+import { discoverEightfoldJobs, eightfoldConfig } from "./eightfold.ts";
 
 export type ScanFailure = { companyId: string; sourceId: string; sourceUrl: string; message: string };
 export type ScanResult = { jobs: JobPosting[]; failures: ScanFailure[]; scannedAt: string; scannedSourceIds: string[] };
@@ -42,7 +43,24 @@ export async function fetchCareerPage(url: string): Promise<string> {
   return html;
 }
 
-export async function scanTargets(targets: TargetCompany[], fetchPage: (url: string) => Promise<string> = fetchCareerPage): Promise<ScanResult> {
+export async function fetchPublicJson(url: string): Promise<unknown> {
+  const safeUrl = await assertPublicUrl(url);
+  const response = await fetch(safeUrl, {
+    redirect: "follow",
+    signal: AbortSignal.timeout(15_000),
+    headers: { Accept: "application/json", "User-Agent": "JobFinderDiscovery/0.1 (+local development)" },
+  });
+  if (!response.ok) throw new Error(`Source returned HTTP ${response.status}.`);
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) throw new Error("Source did not return JSON.");
+  return response.json();
+}
+
+export async function scanTargets(
+  targets: TargetCompany[],
+  fetchPage: (url: string) => Promise<string> = fetchCareerPage,
+  fetchJson: (url: string) => Promise<unknown> = fetchPublicJson,
+): Promise<ScanResult> {
   const scannedAt = new Date().toISOString();
   const jobs: JobPosting[] = [];
   const failures: ScanFailure[] = [];
@@ -52,8 +70,12 @@ export async function scanTargets(targets: TargetCompany[], fetchPage: (url: str
     const sources = target.sources.filter((source) => source.enabled && source.kind !== "EVENTS").slice(0, 5);
     for (const source of sources) {
       try {
-        const html = await fetchPage(source.url);
-        jobs.push(...extractJobs(html, source, target, scannedAt));
+        if (eightfoldConfig(target)) {
+          jobs.push(...await discoverEightfoldJobs(source, target, scannedAt, fetchJson));
+        } else {
+          const html = await fetchPage(source.url);
+          jobs.push(...extractJobs(html, source, target, scannedAt));
+        }
         scannedSourceIds.push(source.id);
       } catch (error) {
         failures.push({ companyId: target.id, sourceId: source.id, sourceUrl: source.url, message: error instanceof Error ? error.message : "Unknown scan error." });

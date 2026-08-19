@@ -47,8 +47,8 @@ export const TOP_TECH_PRESET: CompanyPreset = {
   name: "Top tech",
   description: "A curated mix of 15 major technology platforms, AI labs, and cloud/data companies",
   companies: [
-    { name: "NVIDIA", domain: "nvidia.com", careerUrl: "https://www.nvidia.com/en-us/about-nvidia/careers/", priority: "HIGH", roleKeywords: earlyCareerRoles, eventKeywords: earlyCareerEvents },
-    { name: "Microsoft", domain: "microsoft.com", careerUrl: "https://careers.microsoft.com/", priority: "HIGH", roleKeywords: earlyCareerRoles, eventKeywords: earlyCareerEvents },
+    { name: "NVIDIA", domain: "nvidia.com", careerUrl: "https://jobs.nvidia.com/careers", priority: "HIGH", roleKeywords: earlyCareerRoles, eventKeywords: earlyCareerEvents },
+    { name: "Microsoft", domain: "microsoft.com", careerUrl: "https://apply.careers.microsoft.com/careers", priority: "HIGH", roleKeywords: earlyCareerRoles, eventKeywords: earlyCareerEvents },
     { name: "Meta", domain: "metacareers.com", careerUrl: "https://www.metacareers.com/jobs/", earlyCareersUrl: "https://www.metacareers.com/careerprograms/students/", priority: "HIGH", roleKeywords: earlyCareerRoles, eventKeywords: earlyCareerEvents },
     { name: "Apple", domain: "apple.com", careerUrl: "https://jobs.apple.com/en-us/search", earlyCareersUrl: "https://www.apple.com/careers/us/students.html", priority: "HIGH", roleKeywords: earlyCareerRoles, eventKeywords: earlyCareerEvents },
     { name: "Amazon", domain: "amazon.jobs", careerUrl: "https://www.amazon.jobs/en/", earlyCareersUrl: "https://www.amazon.jobs/content/en/career-programs/university", priority: "HIGH", roleKeywords: earlyCareerRoles, eventKeywords: earlyCareerEvents },
