@@ -3,7 +3,7 @@ import test from "node:test";
 import { extractEventPage } from "./extract-event.ts";
 import type { TargetCompany } from "../domain/opportunity.ts";
 
-const google: TargetCompany = { id:"google",name:"Google",domain:"google.com",priority:"HIGH",roleKeywords:[],eventKeywords:["internship","workshop"],createdAt:"2026-08-20T00:00:00.000Z",sources:[{id:"google-jobs",kind:"CAREERS",url:"https://google.com/jobs",enabled:true,scanCron:"* * * * *"}] };
+const google: TargetCompany = { id:"google",name:"Google",domain:"google.com",priority:"HIGH",roleKeywords:[],eventKeywords:["student","university","early career","campus","event"],createdAt:"2026-08-20T00:00:00.000Z",sources:[{id:"google-jobs",kind:"CAREERS",url:"https://google.com/jobs",enabled:true,scanCron:"* * * * *"}] };
 
 test("extracts a WithGoogle workshop from metadata without requiring a published date", () => {
   const html='<title>Technical Resume Workshop at Google Toronto</title><meta name="description" content="Applying for internships this semester? Join our workshop.">';

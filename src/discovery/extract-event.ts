@@ -31,7 +31,9 @@ export function extractEventPage(html: string, url: string, target: TargetCompan
   const description = meta($, "description") || meta($, "og:description");
   if (!title) throw new Error("Event page did not provide a title.");
   const haystack = `${title} ${description}`.toLowerCase();
-  if (target.eventKeywords.length && !target.eventKeywords.some((keyword) => haystack.includes(keyword.toLowerCase()))) {
+  const coreEarlyCareerEvent = /\b(?:internships?|students?|early career|new grads?|graduates?|university|campus|resume workshop|career workshop|hackathon|recruiting event)\b/i;
+  const configuredMatch = target.eventKeywords.some((keyword) => haystack.includes(keyword.toLowerCase()));
+  if (!coreEarlyCareerEvent.test(haystack) && !configuredMatch) {
     throw new Error("Event does not match the company event keywords.");
   }
   const source: TargetSource = target.sources.find(({ kind }) => kind === "EVENTS") ?? {
