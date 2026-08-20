@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { JobPosting, SourceKind, TargetCompany, TargetSource } from "../domain/opportunity.ts";
+import type { JobPosting, RecruitingEvent, SourceKind, TargetCompany, TargetSource } from "../domain/opportunity.ts";
 
 type CompanyRow = { id: string; name: string; domain: string; priority: string; role_keywords: string; event_keywords: string; created_at: string };
 type SourceRow = { id: string; company_id: string; kind: string; url: string; enabled: number; scan_cron: string };
@@ -42,6 +42,14 @@ export class JobFinderRepository {
         first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, content_fingerprint TEXT NOT NULL,
         extraction_confidence REAL NOT NULL, active INTEGER NOT NULL DEFAULT 1, missed_scans INTEGER NOT NULL DEFAULT 0,
         UNIQUE(company_id, canonical_url)
+      );
+      CREATE TABLE IF NOT EXISTS recruiting_events (
+        id TEXT PRIMARY KEY, company_id TEXT NOT NULL REFERENCES target_companies(id) ON DELETE CASCADE,
+        source_id TEXT NOT NULL, source_url TEXT NOT NULL, canonical_url TEXT NOT NULL, registration_url TEXT NOT NULL,
+        title TEXT NOT NULL, description TEXT NOT NULL, event_type TEXT NOT NULL, starts_at TEXT, ends_at TEXT,
+        timezone TEXT NOT NULL, format TEXT NOT NULL, location TEXT, registration_deadline TEXT, audience TEXT NOT NULL,
+        status TEXT NOT NULL, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, content_fingerprint TEXT NOT NULL,
+        extraction_confidence REAL NOT NULL, active INTEGER NOT NULL DEFAULT 1, UNIQUE(company_id, canonical_url)
       );
       CREATE TABLE IF NOT EXISTS scan_runs (
         id TEXT PRIMARY KEY, started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
@@ -114,6 +122,17 @@ export class JobFinderRepository {
       firstSeenAt: row.first_seen_at, lastSeenAt: row.last_seen_at, contentFingerprint: row.content_fingerprint,
       extractionConfidence: row.extraction_confidence,
     }));
+  }
+
+  listEvents(): RecruitingEvent[] {
+    const rows=this.db.prepare("SELECT * FROM recruiting_events WHERE active=1 ORDER BY starts_at IS NULL,starts_at,last_seen_at DESC").all() as Array<Record<string,unknown>>;
+    return rows.map((row)=>({kind:"EVENT",id:String(row.id),companyId:String(row.company_id),sourceId:String(row.source_id),sourceUrl:String(row.source_url),canonicalUrl:String(row.canonical_url),registrationUrl:String(row.registration_url),title:String(row.title),description:String(row.description),eventType:row.event_type as RecruitingEvent["eventType"],startsAt:row.starts_at?String(row.starts_at):null,endsAt:row.ends_at?String(row.ends_at):null,timezone:String(row.timezone),format:row.format as RecruitingEvent["format"],location:row.location?String(row.location):null,registrationDeadline:row.registration_deadline?String(row.registration_deadline):null,audience:JSON.parse(String(row.audience)) as string[],status:row.status as RecruitingEvent["status"],firstSeenAt:String(row.first_seen_at),lastSeenAt:String(row.last_seen_at),contentFingerprint:String(row.content_fingerprint),extractionConfidence:Number(row.extraction_confidence)}));
+  }
+
+  saveEvent(event: RecruitingEvent): "NEW"|"UPDATED"|null {
+    const existing=this.db.prepare("SELECT content_fingerprint,first_seen_at FROM recruiting_events WHERE company_id=? AND canonical_url=?").get(event.companyId,event.canonicalUrl) as {content_fingerprint:string;first_seen_at:string}|undefined;
+    this.db.prepare(`INSERT INTO recruiting_events(id,company_id,source_id,source_url,canonical_url,registration_url,title,description,event_type,starts_at,ends_at,timezone,format,location,registration_deadline,audience,status,first_seen_at,last_seen_at,content_fingerprint,extraction_confidence,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1) ON CONFLICT(company_id,canonical_url) DO UPDATE SET source_id=excluded.source_id,source_url=excluded.source_url,registration_url=excluded.registration_url,title=excluded.title,description=excluded.description,event_type=excluded.event_type,starts_at=excluded.starts_at,ends_at=excluded.ends_at,timezone=excluded.timezone,format=excluded.format,location=excluded.location,registration_deadline=excluded.registration_deadline,audience=excluded.audience,status=excluded.status,last_seen_at=excluded.last_seen_at,content_fingerprint=excluded.content_fingerprint,extraction_confidence=excluded.extraction_confidence,active=1`).run(event.id,event.companyId,event.sourceId,event.sourceUrl,event.canonicalUrl,event.registrationUrl,event.title,event.description,event.eventType,event.startsAt,event.endsAt,event.timezone,event.format,event.location,event.registrationDeadline,JSON.stringify(event.audience),event.status,existing?.first_seen_at??event.firstSeenAt,event.lastSeenAt,event.contentFingerprint,event.extractionConfidence);
+    return !existing?"NEW":existing.content_fingerprint!==event.contentFingerprint?"UPDATED":null;
   }
 
   saveJobs(jobs: JobPosting[], scannedSourceIds: string[] = []): DiscoveryChange[] {

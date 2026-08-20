@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { createTargetCompany, updateTargetCompany } from "@/domain/target-company";
 import { STARTER_PRESETS, type CompanyPreset } from "@/domain/company-presets";
-import type { JobPosting, TargetCompany } from "@/domain/opportunity";
+import type { JobPosting, RecruitingEvent, TargetCompany } from "@/domain/opportunity";
 
 type View = "overview" | "notifications" | "opportunities" | "events" | "applications" | "targets";
 type NotificationItem = { id: string; jobId: string; companyId: string; kind: "NEW" | "UPDATED"; createdAt: string; readAt: string | null; companyName: string; jobTitle: string; applicationUrl: string };
@@ -57,6 +57,7 @@ export function Dashboard() {
   const [view, setView] = useState<View>("overview");
   const [targets, setTargets] = useState(demoTargets);
   const [jobs, setJobs] = useState<JobPosting[]>([]);
+  const [events, setEvents] = useState<RecruitingEvent[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [storageReady, setStorageReady] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
@@ -64,6 +65,7 @@ export function Dashboard() {
   const [editingTarget, setEditingTarget] = useState<TargetCompany | null>(null);
   const [scanState, setScanState] = useState<"idle" | "scanning" | "success" | "error">("idle");
   const [scanMessage, setScanMessage] = useState("Run the first scan to discover opportunities");
+  const [eventMessage, setEventMessage] = useState("");
   const sourceCount = useMemo(() => targets.reduce((total, target) => total + target.sources.length, 0), [targets]);
 
   useEffect(() => {
@@ -76,7 +78,7 @@ export function Dashboard() {
     setStorageReady(true);
     void (async () => {
       try {
-        const [targetResponse, jobResponse, notificationResponse] = await Promise.all([fetch("/api/targets"), fetch("/api/opportunities"), fetch("/api/notifications")]);
+        const [targetResponse, jobResponse, eventResponse, notificationResponse] = await Promise.all([fetch("/api/targets"), fetch("/api/opportunities"), fetch("/api/events"), fetch("/api/notifications")]);
         if (targetResponse.ok) {
           const payload = await targetResponse.json() as { targets?: TargetCompany[] };
           if (payload.targets?.length) setTargets(payload.targets);
@@ -85,6 +87,10 @@ export function Dashboard() {
         if (jobResponse.ok) {
           const payload = await jobResponse.json() as { jobs?: JobPosting[] };
           if (payload.jobs?.length) setJobs(payload.jobs);
+        }
+        if (eventResponse.ok) {
+          const payload = await eventResponse.json() as { events?: RecruitingEvent[] };
+          if (payload.events) setEvents(payload.events);
         }
         if (notificationResponse.ok) {
           const payload = await notificationResponse.json() as { notifications?: NotificationItem[] };
@@ -233,6 +239,22 @@ export function Dashboard() {
     await fetch(`/api/notifications/${id}`, { method: "DELETE" }).catch(() => undefined);
   }
 
+  async function importEvent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setEventMessage("Importing event…");
+    try {
+      const response = await fetch("/api/events", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: String(form.get("url") ?? ""), companyId: String(form.get("companyId") ?? "") }) });
+      const payload = await response.json() as { event?: RecruitingEvent; error?: string; change?: "NEW" | "UPDATED" | null };
+      if (!response.ok || !payload.event) throw new Error(payload.error ?? "Unable to import event.");
+      setEvents((current) => [payload.event!, ...current.filter(({ id }) => id !== payload.event!.id)]);
+      setEventMessage(payload.change === "NEW" ? "Event added and notification sent." : payload.change === "UPDATED" ? "Event updated." : "Event is already being tracked.");
+      event.currentTarget.reset();
+    } catch (error) {
+      setEventMessage(error instanceof Error ? error.message : "Unable to import event.");
+    }
+  }
+
   return (
     <main>
       <aside className="sidebar">
@@ -243,7 +265,7 @@ export function Dashboard() {
               {item.label}
               {item.id === "opportunities" && <span className="count">{jobs.length}</span>}
               {item.id === "notifications" && notifications.some(({ readAt }) => !readAt) && <span className="count">{notifications.filter(({ readAt }) => !readAt).length}</span>}
-              {item.id === "events" && <span className="count">0</span>}
+              {item.id === "events" && <span className="count">{events.length}</span>}
             </button>
           ))}
         </nav>
@@ -251,11 +273,11 @@ export function Dashboard() {
       </aside>
 
       <section className="content">
-        {view === "overview" && <Overview targets={targets} sourceCount={sourceCount} jobs={jobs} onAdd={openAddCompany} onScan={scanNow} scanState={scanState} onViewTargets={() => navigate("targets")} />}
+        {view === "overview" && <Overview targets={targets} sourceCount={sourceCount} jobs={jobs} events={events} onAdd={openAddCompany} onScan={scanNow} scanState={scanState} onViewTargets={() => navigate("targets")} />}
         {view === "notifications" && <NotificationsView notifications={notifications} onRead={markNotificationRead} onReadAll={markAllNotificationsRead} onDismiss={dismissNotification} />}
         {view === "targets" && <TargetsView targets={targets} showForm={showForm} editingTarget={editingTarget} errors={errors} onAddPreset={addPreset} onShowForm={() => { setEditingTarget(null); setShowForm(true); }} onHideForm={() => { setShowForm(false); setEditingTarget(null); setErrors([]); }} onSubmit={addTarget} onEdit={editTarget} onRemove={removeTarget} />}
         {view === "opportunities" && <OpportunitiesView jobs={jobs} targets={targets} scanState={scanState} scanMessage={scanMessage} onScan={scanNow} />}
-        {view === "events" && <EmptyView eyebrow="Early-career calendar" title="Events" body="Information sessions, university events, workshops, hackathons, and registration deadlines will appear here." action="Manage event sources" onAction={() => navigate("targets")} />}
+        {view === "events" && <EventsView events={events} targets={targets} message={eventMessage} onImport={importEvent} />}
         {view === "applications" && <EmptyView eyebrow="Application pipeline" title="Applications" body="Applications you track will move through saved, submitted, assessment, interview, and decision stages here." action="Browse opportunities" onAction={() => navigate("opportunities")} />}
       </section>
     </main>
@@ -274,20 +296,33 @@ function NotificationsView({ notifications, onRead, onReadAll, onDismiss }: { no
   </>;
 }
 
-function Overview({ targets, sourceCount, jobs, onAdd, onScan, scanState, onViewTargets }: { targets: TargetCompany[]; sourceCount: number; jobs: JobPosting[]; onAdd: () => void; onScan: () => void; scanState: string; onViewTargets: () => void }) {
+function Overview({ targets, sourceCount, jobs, events, onAdd, onScan, scanState, onViewTargets }: { targets: TargetCompany[]; sourceCount: number; jobs: JobPosting[]; events: RecruitingEvent[]; onAdd: () => void; onScan: () => void; scanState: string; onViewTargets: () => void }) {
   return <>
     <header><div><p className="eyebrow">Opportunity radar</p><h1>Good morning.</h1><p className="lede">Your company watchlist is ready for jobs and early-career events.</p></div><button className="primary" onClick={onAdd}>+ Add company</button></header>
     <div className="metrics">
       <article><span>Target companies</span><strong>{targets.length}</strong><small>Across your watchlist</small></article>
       <article><span>Active sources</span><strong>{sourceCount}</strong><small>Career and event pages</small></article>
       <article><span>New opportunities</span><strong>{jobs.length}</strong><small>{jobs.length ? "Matching discovered roles" : "Waiting for first scan"}</small></article>
-      <article><span>Applications</span><strong>0</strong><small>Nothing tracked yet</small></article>
+      <article><span>Early-career events</span><strong>{events.length}</strong><small>{events.length ? "Upcoming and announced" : "Nothing tracked yet"}</small></article>
     </div>
     <section className="panel overviewTargets">
       <div className="panelTitle"><div><p className="eyebrow">Watchlist preview</p><h2>Companies being watched</h2></div><button className="textButton" onClick={onViewTargets}>View all →</button></div>
       {targets.length ? <div className="compactList">{targets.slice(0, 3).map((target) => <div key={target.id}><span className="companyIcon">{target.name.slice(0, 2).toUpperCase()}</span><span><b>{target.name}</b><small>{target.sources.length} active source{target.sources.length === 1 ? "" : "s"}</small></span></div>)}</div> : <p className="emptyInline">No companies yet. Add one to begin watching.</p>}
     </section>
     <div className="scanCta"><div><b>Ready to check your sources?</b><span>Run an on-demand scan across all configured career pages.</span></div><button className="primary" onClick={onScan} disabled={scanState === "scanning"}>{scanState === "scanning" ? "Scanning…" : "Scan now"}</button></div>
+  </>;
+}
+
+function EventsView({ events, targets, message, onImport }: { events: RecruitingEvent[]; targets: TargetCompany[]; message: string; onImport: (event: FormEvent<HTMLFormElement>) => void }) {
+  const companyName = (id: string) => targets.find((target) => target.id === id)?.name ?? "Unknown company";
+  return <>
+    <header><div><p className="eyebrow">Early-career calendar</p><h1>Events</h1><p className="lede">Workshops, information sessions, hackathons, and recruiting events associated with your watchlist.</p></div></header>
+    <form className="targetForm" onSubmit={onImport}>
+      <div className="formHeading"><div><p className="eyebrow">Direct event import</p><h2>Add a WithGoogle RSVP event</h2></div><p>Paste an event URL that was announced outside the sources currently monitored.</p></div>
+      <div className="formGrid"><label>Company<select name="companyId" required defaultValue=""><option value="" disabled>Select company</option>{targets.map((target)=><option key={target.id} value={target.id}>{target.name}</option>)}</select></label><label className="wide">Event URL<input name="url" type="url" required placeholder="https://rsvp.withgoogle.com/events/…" /></label></div>
+      <div className="formActions">{message && <p>{message}</p>}<button className="primary" type="submit">Import event</button></div>
+    </form>
+    {events.length ? <section className="panel opportunityList">{events.map((item)=><article className="opportunity" key={item.id}><div><p className="eyebrow">{companyName(item.companyId)} · {item.eventType.replaceAll("_"," ").toLowerCase()}</p><h2>{item.title}</h2><p>{item.location ?? (item.format === "VIRTUAL" ? "Virtual" : "Location not announced")} · {item.startsAt ? new Date(item.startsAt).toLocaleString() : "Date not announced"}</p><p>{item.description}</p></div><div className="opportunityMeta"><span>{item.status.replaceAll("_"," ").toLowerCase()}</span><a href={item.registrationUrl} target="_blank" rel="noreferrer">View event ↗</a></div></article>)}</section> : <section className="panel emptyState"><div className="emptyGlyph">◇</div><h2>No events tracked yet</h2><p>Import the Google workshop URL above. Automatic announcement-source discovery is the next event stage.</p></section>}
   </>;
 }
 

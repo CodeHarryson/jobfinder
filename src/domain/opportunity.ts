@@ -55,7 +55,7 @@ export type RecruitingEvent = DiscoveryEvidence & {
     | "HACKATHON"
     | "NETWORKING"
     | "OTHER";
-  startsAt: string;
+  startsAt: string | null;
   endsAt: string | null;
   timezone: string;
   format: "VIRTUAL" | "IN_PERSON" | "HYBRID";
