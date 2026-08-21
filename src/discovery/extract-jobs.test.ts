@@ -51,8 +51,32 @@ test("keeps explicitly US-located jobs and rejects international or unknown loca
   assert.equal(isUnitedStatesJob({ locations: ["Bellevue, WA"] }), true);
   assert.equal(isUnitedStatesJob({ locations: ["Indianapolis, IN"] }), true);
   assert.equal(isUnitedStatesJob({ locations: ["Bengaluru, KA, IN"] }), false);
+  assert.equal(isUnitedStatesJob({ locations: ["Cork, CO, IE"] }), false);
+  assert.equal(isUnitedStatesJob({ locations: ["Amsterdam, NH, NL"] }), false);
+  assert.equal(isUnitedStatesJob({ locations: ["Haifa, Haifa District, IL"] }), false);
+  assert.equal(isUnitedStatesJob({ locations: ["Markham, ON, CA"] }), false);
+  assert.equal(isUnitedStatesJob({ locations: ["CO", "Remote"] }), false);
   assert.equal(isUnitedStatesJob({ locations: ["Remote"] }), false);
   assert.equal(isUnitedStatesJob({ locations: [] }), false);
+});
+
+test("keeps undergraduate internships and new-grad roles while rejecting other education levels", () => {
+  const scoped = `<!doctype html><html><body>
+    <a href="https://job-boards.greenhouse.io/acme/jobs/100001">Software Engineering Intern</a>
+    <a href="https://job-boards.greenhouse.io/acme/jobs/100002">Undergraduate Software Engineering Intern</a>
+    <a href="https://job-boards.greenhouse.io/acme/jobs/100003">Software Engineer, New Grad</a>
+    <a href="https://job-boards.greenhouse.io/acme/jobs/100004">Graduate Software Engineer</a>
+    <a href="https://job-boards.greenhouse.io/acme/jobs/100005">Masters Software Engineering Intern</a>
+    <a href="https://job-boards.greenhouse.io/acme/jobs/100006">PhD Research Intern</a>
+    <a href="https://job-boards.greenhouse.io/acme/jobs/100007">MBA Product Intern</a>
+    <a href="https://job-boards.greenhouse.io/acme/jobs/100008">Graduate Software Intern</a>
+    <a href="https://job-boards.greenhouse.io/acme/jobs/100009">High School Engineering Intern</a>
+    <a href="https://job-boards.greenhouse.io/acme/jobs/100010">Early Career Software Engineer</a>
+  </body></html>`;
+  const jobs = extractJobs(scoped, target.sources[0], target, "2026-08-21T00:00:00.000Z");
+  assert.deepEqual(jobs.map(({ title }) => title), [
+    "Software Engineering Intern", "Undergraduate Software Engineering Intern", "Software Engineer, New Grad", "Graduate Software Engineer",
+  ]);
 });
 
 test("rejects substring, recruiting, navigation, media, and search false positives", () => {

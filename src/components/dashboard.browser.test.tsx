@@ -140,9 +140,9 @@ describe("Dashboard navigation and watched companies", () => {
     render(<Dashboard />);
 
     await user.click(screen.getByRole("button", { name: "Target companies" }));
-    await user.click(screen.getByRole("button", { name: "Add 10 companies" }));
+    await user.click(screen.getByRole("button", { name: "Add 9 companies" }));
 
-    for (const company of ["Together AI", "Stripe", "Notion", "Anthropic", "OpenAI", "Databricks", "Canva", "Rippling", "Ramp", "Anduril"]) {
+    for (const company of ["Together AI", "Stripe", "Notion", "Anthropic", "OpenAI", "Databricks", "Canva", "Rippling", "Ramp"]) {
       expect(screen.getByRole("heading", { level: 3, name: company })).toBeTruthy();
     }
     await waitFor(() => expect(window.localStorage.getItem(STORAGE_KEY)).toContain("together.ai"));

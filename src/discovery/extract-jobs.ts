@@ -36,17 +36,22 @@ export function idFor(companyId: string, url: string): string {
 export function employmentType(title: string, rawType = ""): JobPosting["employmentType"] {
   const text = `${title} ${rawType}`.toLowerCase();
   if (/\b(?:intern|internship|co[ -]?op)\b/.test(text)) return "INTERNSHIP";
-  if (/\b(?:new grad(?:uate)?|graduate (?:role|program|engineer)|entry[ -]level)\b/.test(text)) return "NEW_GRAD";
+  if (/\b(?:new grad(?:uate)?|graduate (?:role|program)|graduate .{0,30}\b(?:engineer|developer)|entry[ -]level)\b/.test(text)) return "NEW_GRAD";
   if (/\b(?:early career|apprentice|apprenticeship)\b/.test(text)) return "EARLY_CAREER";
   return "OTHER";
 }
 
-const EARLY_CAREER_ROLE = /\b(?:intern|internship|co[ -]?op|new grad(?:uate)?|graduate (?:role|program|engineer)|early career|entry[ -]level|apprentice|apprenticeship)\b/i;
+const INTERNSHIP_ROLE = /\b(?:intern|internship|co[ -]?op)\b/i;
+const NEW_GRAD_ROLE = /\b(?:new grad(?:uate)?|graduate (?:role|program)|graduate .{0,30}\b(?:engineer|developer)|entry[ -]level)\b/i;
+const NON_UNDERGRAD_INTERNSHIP = /\b(?:master(?:'s|s)?|mba|ph\.?d\.?|doctoral|doctorate|post[ -]?doc(?:toral)?|graduate .{0,30}\bintern|high school|secondary school)\b/i;
 const HIRING_TEAM_ROLE = /\b(?:recruiter|recruiting|talent acquisition|campus recruiting|university recruiting|program manager)\b|\bmanager\b.*\bintern(?:ship)? program\b/i;
 const NAVIGATION_TITLE = /^(?:early careers?|internships?(?: for students)?|university recruiting|explore |find |view |search jobs?|watch (?:the )?film)/i;
 
 function isEligibleEarlyCareerTitle(title: string): boolean {
-  return EARLY_CAREER_ROLE.test(title) && !HIRING_TEAM_ROLE.test(title) && !NAVIGATION_TITLE.test(title.trim());
+  const normalized = title.trim();
+  if (HIRING_TEAM_ROLE.test(normalized) || NAVIGATION_TITLE.test(normalized)) return false;
+  if (NEW_GRAD_ROLE.test(normalized)) return true;
+  return INTERNSHIP_ROLE.test(normalized) && !NON_UNDERGRAD_INTERNSHIP.test(normalized);
 }
 
 function isLikelyJobDetailUrl(value: string): boolean {
@@ -83,8 +88,17 @@ function decodedJsonString(value: string): string {
 export function matchesTarget(job: Pick<JobPosting, "title" | "description">, target: TargetCompany): boolean {
   if (!isEligibleEarlyCareerTitle(job.title)) return false;
   if (!target.roleKeywords.length) return true;
+  const configured = target.roleKeywords.map((keyword) => keyword.trim().toLowerCase()).filter(Boolean);
+  const generic = configured.filter((keyword) => GENERIC_EARLY_CAREER_KEYWORDS.has(keyword));
+  const roleSpecific = configured.filter((keyword) => !GENERIC_EARLY_CAREER_KEYWORDS.has(keyword));
+  if (generic.length) {
+    const allowsInternship = generic.some((keyword) => keyword === "intern" || keyword === "internship" || keyword === "university");
+    const allowsNewGrad = generic.some((keyword) => keyword === "new grad" || keyword === "graduate" || keyword === "early career");
+    if (INTERNSHIP_ROLE.test(job.title) ? !allowsInternship : !allowsNewGrad) return false;
+  }
+  if (!roleSpecific.length) return true;
   const haystack = `${job.title} ${job.description}`.toLowerCase();
-  return target.roleKeywords.some((keyword) => {
+  return roleSpecific.some((keyword) => {
     const escaped = keyword.trim().toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return escaped ? new RegExp(`(^|\\W)${escaped}(?=\\W|$)`, "i").test(haystack) : false;
   });

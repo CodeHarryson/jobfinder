@@ -227,7 +227,8 @@ export class JobFinderRepository {
       tc.name AS company_name,jp.title AS job_title,jp.application_url
       FROM notification_deliveries nd JOIN discovery_changes dc ON dc.id=nd.change_id
       JOIN target_companies tc ON tc.id=dc.company_id JOIN job_postings jp ON jp.id=dc.job_id
-      WHERE nd.channel='DISCORD' AND nd.status IN ('PENDING','FAILED') AND nd.next_attempt_at<=? ORDER BY nd.created_at LIMIT ?`).all(now.toISOString(), limit) as Array<{ id: string; attempts: number; change_id: string; job_id: string; company_id: string; kind: string; created_at: string; read_at: string | null; company_name: string; job_title: string; application_url: string }>;
+      WHERE nd.channel='DISCORD' AND nd.status IN ('PENDING','FAILED') AND nd.next_attempt_at<=?
+      AND jp.active=1 AND jp.missed_scans=0 ORDER BY nd.created_at LIMIT ?`).all(now.toISOString(), limit) as Array<{ id: string; attempts: number; change_id: string; job_id: string; company_id: string; kind: string; created_at: string; read_at: string | null; company_name: string; job_title: string; application_url: string }>;
     const claim = this.db.prepare("UPDATE notification_deliveries SET status='SENDING',attempts=attempts+1,updated_at=? WHERE id=? AND status IN ('PENDING','FAILED')");
     return rows.flatMap((row) => Number(claim.run(now.toISOString(), row.id).changes) ? [{
       id: row.id, attempts: row.attempts + 1, notification: { id: row.change_id, jobId: row.job_id, companyId: row.company_id,

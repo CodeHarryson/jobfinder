@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { TargetCompany } from "../domain/opportunity.ts";
 import { discoverEightfoldJobs, extractEightfoldJobs } from "./eightfold.ts";
+import { isUnitedStatesJob } from "./scan-targets.ts";
 
 const target: TargetCompany = {
   id: "nvidia", name: "NVIDIA", domain: "nvidia.com", priority: "HIGH",
@@ -21,6 +22,15 @@ test("normalizes eligible Eightfold positions and rejects recruiting jobs", () =
     { title: jobs[0].title, employmentType: jobs[0].employmentType, canonicalUrl: jobs[0].canonicalUrl, extractionConfidence: jobs[0].extractionConfidence },
     { title: "Software Engineering Intern", employmentType: "INTERNSHIP", canonicalUrl: "https://jobs.nvidia.com/careers/job/1", extractionConfidence: 0.98 },
   );
+});
+
+test("rejects Qualcomm-style foreign locations that resemble US state codes", () => {
+  const jobs = extractEightfoldJobs({ status: 200, data: { positions: [
+    { name: "Software Engineering Intern", standardizedLocations: ["Cork, CO, IE"], positionUrl: "/careers/job/ireland" },
+    { name: "AI Intern", standardizedLocations: ["Haifa, Haifa District, IL"], positionUrl: "/careers/job/israel" },
+    { name: "Software Engineer Intern", standardizedLocations: ["San Diego, CA, US"], positionUrl: "/careers/job/us" },
+  ] } }, "https://careers.qualcomm.com", target.sources[0], target, "2026-08-21T00:00:00.000Z");
+  assert.deepEqual(jobs.filter(isUnitedStatesJob).map(({ canonicalUrl }) => canonicalUrl), ["https://careers.qualcomm.com/careers/job/us"]);
 });
 
 test("paginates and deduplicates Eightfold search results", async () => {

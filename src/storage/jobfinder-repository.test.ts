@@ -65,3 +65,21 @@ test("persists provider-level discovery health for the latest scan", () => {
   assert.deepEqual(health?.sourceResults, [{ provider: "GREENHOUSE", discoveredCount: 4, unitedStatesCount: 3 }]);
   repository.close();
 });
+
+test("does not deliver queued alerts for jobs omitted by the latest successful scan", () => {
+  const repository = new JobFinderRepository();
+  const created = createTargetCompany({ name: "Qualcomm", domain: "qualcomm.com", careerUrl: "https://careers.qualcomm.com/careers" });
+  assert.equal(created.ok, true);
+  if (!created.ok) return;
+  repository.saveTarget(created.value);
+  const job: JobPosting = { kind: "JOB", id: "foreign-job", companyId: created.value.id, sourceId: created.value.sources[0].id,
+    sourceUrl: created.value.sources[0].url, canonicalUrl: "https://careers.qualcomm.com/careers/job/foreign",
+    applicationUrl: "https://careers.qualcomm.com/careers/job/foreign", title: "Engineering Intern", description: "",
+    locations: ["Cork, CO, IE"], employmentType: "INTERNSHIP", firstSeenAt: "2026-08-21T00:00:00.000Z",
+    lastSeenAt: "2026-08-21T00:00:00.000Z", contentFingerprint: "foreign", extractionConfidence: 0.98 };
+  const changes = repository.saveJobs([job]);
+  assert.equal(repository.enqueueDiscordDeliveries(changes), 1);
+  repository.saveJobs([], [created.value.sources[0].id]);
+  assert.equal(repository.claimDiscordDeliveries().length, 0);
+  repository.close();
+});

@@ -23,11 +23,17 @@ export function isUnitedStatesJob(job: Pick<JobPosting, "locations">): boolean {
   const stateCodes = "AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC";
   return job.locations.some((location) => {
     if (/\b(?:United States(?: of America)?|USA|U\.S\.A\.|US)\b/i.test(location)) return true;
-    // Three-part locations such as "Bengaluru, KA, IN" use IN as an ISO
-    // country code, while "Indianapolis, IN" uses it as a state code.
-    if (/,[ ]*[A-Z]{2},[ ]*IN$/i.test(location)) return false;
-    if (new RegExp(`(?:^|[,;/\\s])(?:${states})(?:$|[,;/\\s])`, "i").test(location)) return true;
-    return new RegExp(`(?:^|,\\s*)(?:${stateCodes})(?:$|[,;/\\s])`).test(location);
+    return location.split(/[;|]/).some((part) => {
+      const value = part.trim();
+      const components = value.split(",").map((component) => component.trim()).filter(Boolean);
+      // In a three-part location, a terminal ISO code takes precedence over
+      // state-like tokens: "Cork, CO, IE" is Ireland, not Colorado.
+      if (components.length >= 3 && /^[A-Z]{2}$/i.test(components.at(-1) ?? "")) return false;
+      if (new RegExp(`(?:^|[,–—-]\\s*)(?:${states})$`, "i").test(value)) return true;
+      // A state abbreviation requires a preceding locality. Bare "CO" can
+      // mean Colombia and must not be treated as Colorado.
+      return components.length === 2 && new RegExp(`^(?:${stateCodes})$`).test(components[1]);
+    });
   });
 }
 
