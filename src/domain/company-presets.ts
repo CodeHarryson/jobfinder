@@ -27,7 +27,7 @@ export const MAANGO_PRESET: CompanyPreset = {
 export const UNICORN_SCALEUPS_PRESET: CompanyPreset = {
   id: "unicorn-scaleups",
   name: "Unicorns & scale-ups",
-  description: "Together AI, Stripe, Notion, Anthropic, OpenAI, Databricks, Canva, Rippling, Ramp, and Anduril",
+  description: "Together AI, Stripe, Notion, Anthropic, OpenAI, Databricks, Canva, Rippling, and Ramp",
   companies: [
     { name: "Together AI", domain: "together.ai", careerUrl: "https://www.together.ai/careers", priority: "HIGH", roleKeywords: earlyCareerRoles, eventKeywords: earlyCareerEvents },
     { name: "Stripe", domain: "stripe.com", careerUrl: "https://stripe.com/jobs/search", priority: "HIGH", roleKeywords: earlyCareerRoles, eventKeywords: earlyCareerEvents },
@@ -38,7 +38,6 @@ export const UNICORN_SCALEUPS_PRESET: CompanyPreset = {
     { name: "Canva", domain: "canva.com", careerUrl: "https://careers.canva.com/jobs/", priority: "HIGH", roleKeywords: earlyCareerRoles, eventKeywords: earlyCareerEvents },
     { name: "Rippling", domain: "rippling.com", careerUrl: "https://www.rippling.com/careers/open-roles", priority: "HIGH", roleKeywords: earlyCareerRoles, eventKeywords: earlyCareerEvents },
     { name: "Ramp", domain: "ramp.com", careerUrl: "https://jobs.ashbyhq.com/ramp", priority: "HIGH", roleKeywords: earlyCareerRoles, eventKeywords: earlyCareerEvents },
-    { name: "Anduril", domain: "anduril.com", careerUrl: "https://www.anduril.com/open-roles/", priority: "HIGH", roleKeywords: earlyCareerRoles, eventKeywords: earlyCareerEvents },
   ],
 };
 

@@ -63,7 +63,6 @@ const companies = [
   ["Akuna Capital","akunacapital.com","https://akunacapital.com/careers"],
   ["Belvedere Trading","belvederetrading.com","https://www.belvederetrading.com/careers"],
   ["Virtu","virtu.com","https://www.virtu.com/careers/"],
-  ["Applied Intuition","applied.co","https://www.applied.co/careers"],
   ["Groq","groq.com","https://groq.com/careers"],
   ["Cerebras","cerebras.ai","https://www.cerebras.ai/careers"],
   ["Lambda","lambda.ai","https://lambda.ai/careers"],
