@@ -1,5 +1,5 @@
 import type { JobPosting, TargetCompany, TargetSource } from "../domain/opportunity.ts";
-import { employmentType, fingerprint, idFor, matchesTarget } from "./extract-jobs.ts";
+import { discoveryQueries, employmentType, fingerprint, idFor, matchesTarget } from "./extract-jobs.ts";
 
 type EightfoldPosition = {
   id?: number | string;
@@ -18,8 +18,14 @@ type EightfoldResponse = {
 type EightfoldConfig = { apiOrigin: string; domain: string };
 
 const configs: Record<string, EightfoldConfig> = {
+  "americanexpress.com": { apiOrigin: "https://aexp.eightfold.ai", domain: "americanexpress.com" },
+  "capitalone.com": { apiOrigin: "https://capitalone.eightfold.ai", domain: "capitalone.com" },
+  "micron.com": { apiOrigin: "https://careers.micron.com", domain: "micron.com" },
   "microsoft.com": { apiOrigin: "https://apply.careers.microsoft.com", domain: "microsoft.com" },
+  "jobs.netflix.com": { apiOrigin: "https://explore.jobs.netflix.net", domain: "netflix.com" },
   "nvidia.com": { apiOrigin: "https://jobs.nvidia.com", domain: "nvidia.com" },
+  "qualcomm.com": { apiOrigin: "https://careers.qualcomm.com", domain: "qualcomm.com" },
+  "twilio.com": { apiOrigin: "https://jobs.twilio.com", domain: "twilio.com" },
 };
 
 export function eightfoldConfig(target: TargetCompany): EightfoldConfig | null {
@@ -71,7 +77,7 @@ export async function discoverEightfoldJobs(
   const config = eightfoldConfig(target);
   if (!config) return [];
 
-  const queries = [...new Set(target.roleKeywords.map((keyword) => keyword.trim().toLowerCase()).filter(Boolean))];
+  const queries = discoveryQueries(target);
   const jobs: JobPosting[] = [];
   for (const query of queries) {
     let start = 0;

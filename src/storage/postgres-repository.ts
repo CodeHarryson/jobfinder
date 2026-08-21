@@ -1,6 +1,7 @@
 import { Pool, type PoolClient } from "@neondatabase/serverless";
 import type { JobPosting, RecruitingEvent, TargetCompany, TargetSource } from "../domain/opportunity.ts";
 import type { Repository } from "./repository.ts";
+import type { DiscoveryHealth } from "./repository.ts";
 import type { DiscoveryChange, NotificationDelivery, NotificationItem } from "./jobfinder-repository.ts";
 
 type Row = Record<string, unknown>;
@@ -25,6 +26,7 @@ export class PostgresRepository implements Repository {
         CREATE UNIQUE INDEX IF NOT EXISTS target_companies_name_unique_idx ON target_companies(lower(name));
         ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true;
         ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS missed_scans integer NOT NULL DEFAULT 0;
+        ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS source_results jsonb NOT NULL DEFAULT '[]'::jsonb;
       `);
       this.migrated = true;
     }
@@ -93,5 +95,6 @@ export class PostgresRepository implements Repository {
   async claimDiscordDeliveries(limit=10,now=new Date()):Promise<NotificationDelivery[]>{const db=await this.db();const result=await db.query(`WITH claimed AS (SELECT id FROM notification_deliveries WHERE channel='DISCORD' AND status IN ('PENDING','FAILED') AND next_attempt_at<=$1 ORDER BY created_at LIMIT $2 FOR UPDATE SKIP LOCKED), updated AS (UPDATE notification_deliveries nd SET status='SENDING',attempts=nd.attempts+1,updated_at=$1 FROM claimed WHERE nd.id=claimed.id RETURNING nd.*) SELECT u.id,u.attempts,dc.id change_id,dc.job_id,dc.company_id,dc.kind,dc.created_at,dc.read_at,tc.name company_name,jp.title job_title,jp.application_url FROM updated u JOIN discovery_changes dc ON dc.id=u.change_id JOIN target_companies tc ON tc.id=dc.company_id JOIN job_postings jp ON jp.id=dc.job_id`,[now.toISOString(),limit]);return result.rows.map((row:Row)=>({id:String(row.id),attempts:Number(row.attempts),notification:this.notification({...row,id:row.change_id})}));}
   async completeDiscordDelivery(id:string,externalId:string){await(await this.db()).query("UPDATE notification_deliveries SET status='SENT',external_id=$1,last_error=NULL,updated_at=now() WHERE id=$2",[externalId,id]);}
   async failDiscordDelivery(id:string,attempts:number,error:string){const delays=[60_000,300_000,900_000,3_600_000];const next=new Date(Date.now()+delays[Math.min(attempts-1,delays.length-1)]);await(await this.db()).query("UPDATE notification_deliveries SET status='FAILED',next_attempt_at=$1,last_error=$2,updated_at=now() WHERE id=$3",[next.toISOString(),error.slice(0,500),id]);}
-  async recordScan(input:{startedAt:string;finishedAt:string;targetCount:number;jobCount:number;failures:unknown[]}){await(await this.db()).query("INSERT INTO scan_runs(id,started_at,finished_at,target_count,job_count,failure_count,failures) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb)",[crypto.randomUUID(),input.startedAt,input.finishedAt,input.targetCount,input.jobCount,input.failures.length,JSON.stringify(input.failures)]);}
+  async recordScan(input:{startedAt:string;finishedAt:string;targetCount:number;jobCount:number;failures:unknown[];sourceResults?:unknown[]}){await(await this.db()).query("INSERT INTO scan_runs(id,started_at,finished_at,target_count,job_count,failure_count,failures,source_results) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb)",[crypto.randomUUID(),input.startedAt,input.finishedAt,input.targetCount,input.jobCount,input.failures.length,JSON.stringify(input.failures),JSON.stringify(input.sourceResults??[])]);}
+  async getDiscoveryHealth():Promise<DiscoveryHealth|null>{const result=await(await this.db()).query("SELECT * FROM scan_runs ORDER BY started_at DESC LIMIT 1");const row=result.rows[0] as Row|undefined;return row?{startedAt:new Date(String(row.started_at)).toISOString(),finishedAt:new Date(String(row.finished_at)).toISOString(),targetCount:Number(row.target_count),jobCount:Number(row.job_count),failureCount:Number(row.failure_count),failures:row.failures as unknown[],sourceResults:row.source_results as unknown[]}:null;}
 }

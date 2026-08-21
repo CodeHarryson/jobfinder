@@ -90,6 +90,18 @@ export function matchesTarget(job: Pick<JobPosting, "title" | "description">, ta
   });
 }
 
+const GENERIC_EARLY_CAREER_KEYWORDS = new Set(["intern", "internship", "new grad", "graduate", "early career", "university"]);
+
+export function discoveryQueries(target: TargetCompany): string[] {
+  const configured = [...new Set(target.roleKeywords.map((keyword) => keyword.trim().toLowerCase()).filter(Boolean))];
+  const roleSpecific = configured.filter((keyword) => !GENERIC_EARLY_CAREER_KEYWORDS.has(keyword));
+  if (roleSpecific.length) return roleSpecific.slice(0, 4);
+  if (!configured.length) return ["intern", "new grad"];
+  const genericQueries = [configured.some((keyword) => keyword === "intern" || keyword === "internship") ? "intern" : "",
+    configured.some((keyword) => keyword === "new grad" || keyword === "graduate" || keyword === "early career") ? "new grad" : ""].filter(Boolean);
+  return genericQueries.length ? genericQueries : ["intern"];
+}
+
 export function extractJobs(html: string, source: TargetSource, target: TargetCompany, observedAt = new Date().toISOString()): JobPosting[] {
   const $ = load(html);
   const jobs: JobPosting[] = [];

@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { JobPosting, RecruitingEvent, SourceKind, TargetCompany, TargetSource } from "../domain/opportunity.ts";
+import type { DiscoveryHealth } from "./repository.ts";
 
 type CompanyRow = { id: string; name: string; domain: string; priority: string; role_keywords: string; event_keywords: string; created_at: string };
 type SourceRow = { id: string; company_id: string; kind: string; url: string; enabled: number; scan_cron: string };
@@ -53,7 +54,8 @@ export class JobFinderRepository {
       );
       CREATE TABLE IF NOT EXISTS scan_runs (
         id TEXT PRIMARY KEY, started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
-        target_count INTEGER NOT NULL, job_count INTEGER NOT NULL, failure_count INTEGER NOT NULL, failures TEXT NOT NULL
+        target_count INTEGER NOT NULL, job_count INTEGER NOT NULL, failure_count INTEGER NOT NULL, failures TEXT NOT NULL,
+        source_results TEXT NOT NULL DEFAULT '[]'
       );
       CREATE TABLE IF NOT EXISTS discovery_changes (
         id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,
@@ -72,6 +74,8 @@ export class JobFinderRepository {
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(job_postings)").all() as Array<{ name: string }>).map(({ name }) => name));
     if (!jobColumns.has("active")) this.db.exec("ALTER TABLE job_postings ADD COLUMN active INTEGER NOT NULL DEFAULT 1");
     if (!jobColumns.has("missed_scans")) this.db.exec("ALTER TABLE job_postings ADD COLUMN missed_scans INTEGER NOT NULL DEFAULT 0");
+    const scanColumns = new Set((this.db.prepare("PRAGMA table_info(scan_runs)").all() as Array<{ name: string }>).map(({ name }) => name));
+    if (!scanColumns.has("source_results")) this.db.exec("ALTER TABLE scan_runs ADD COLUMN source_results TEXT NOT NULL DEFAULT '[]'");
   }
 
   listTargets(): TargetCompany[] {
@@ -244,9 +248,16 @@ export class JobFinderRepository {
       .run(nextAttemptAt, error.slice(0, 500), new Date().toISOString(), id);
   }
 
-  recordScan(input: { startedAt: string; finishedAt: string; targetCount: number; jobCount: number; failures: unknown[] }) {
-    this.db.prepare("INSERT INTO scan_runs(id,started_at,finished_at,target_count,job_count,failure_count,failures) VALUES(?,?,?,?,?,?,?)")
-      .run(crypto.randomUUID(), input.startedAt, input.finishedAt, input.targetCount, input.jobCount, input.failures.length, JSON.stringify(input.failures));
+  recordScan(input: { startedAt: string; finishedAt: string; targetCount: number; jobCount: number; failures: unknown[]; sourceResults?: unknown[] }) {
+    this.db.prepare("INSERT INTO scan_runs(id,started_at,finished_at,target_count,job_count,failure_count,failures,source_results) VALUES(?,?,?,?,?,?,?,?)")
+      .run(crypto.randomUUID(), input.startedAt, input.finishedAt, input.targetCount, input.jobCount, input.failures.length, JSON.stringify(input.failures), JSON.stringify(input.sourceResults ?? []));
+  }
+
+  getDiscoveryHealth(): DiscoveryHealth | null {
+    const row = this.db.prepare("SELECT * FROM scan_runs ORDER BY started_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+    return row ? { startedAt: String(row.started_at), finishedAt: String(row.finished_at), targetCount: Number(row.target_count),
+      jobCount: Number(row.job_count), failureCount: Number(row.failure_count), failures: JSON.parse(String(row.failures)) as unknown[],
+      sourceResults: JSON.parse(String(row.source_results)) as unknown[] } : null;
   }
 
   close() { this.db.close(); }

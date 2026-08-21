@@ -5,7 +5,7 @@ import { isUnitedStatesJob, scanTargets } from "./scan-targets.ts";
 import type { TargetCompany } from "../domain/opportunity.ts";
 
 const target: TargetCompany = {
-  id: "notion", name: "Notion", domain: "notion.so", priority: "HIGH",
+  id: "notion", name: "Example Company", domain: "example.com", priority: "HIGH",
   roleKeywords: ["intern", "new grad"], eventKeywords: [], createdAt: "2026-01-01T00:00:00.000Z",
   sources: [{ id: "notion-careers", kind: "CAREERS", url: "https://notion.so/careers", enabled: true, scanCron: "* * * * *" }],
 };
