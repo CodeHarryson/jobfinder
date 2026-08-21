@@ -34,11 +34,22 @@ test("continues scanning other sources when one source fails", async () => {
   });
   assert.equal(result.failures.length, 1);
   assert.equal(result.jobs.length, 1);
+  assert.deepEqual(result.scannedSourceIds, ["second-source"]);
+});
+
+test("reports an HTML shell with zero extractable jobs as a failed source", async () => {
+  const result = await scanTargets([target], async () => "<!doctype html><div id='app'></div>");
+  assert.equal(result.jobs.length, 0);
+  assert.equal(result.scannedSourceIds.length, 0);
+  assert.match(result.failures[0].message, /no job records were extractable/i);
 });
 
 test("keeps explicitly US-located jobs and rejects international or unknown locations", () => {
   assert.equal(isUnitedStatesJob({ locations: ["Redmond, WA, US"] }), true);
   assert.equal(isUnitedStatesJob({ locations: ["United States, California, Mountain View"] }), true);
+  assert.equal(isUnitedStatesJob({ locations: ["Mountain View, California"] }), true);
+  assert.equal(isUnitedStatesJob({ locations: ["Bellevue, WA"] }), true);
+  assert.equal(isUnitedStatesJob({ locations: ["Indianapolis, IN"] }), true);
   assert.equal(isUnitedStatesJob({ locations: ["Bengaluru, KA, IN"] }), false);
   assert.equal(isUnitedStatesJob({ locations: ["Remote"] }), false);
   assert.equal(isUnitedStatesJob({ locations: [] }), false);

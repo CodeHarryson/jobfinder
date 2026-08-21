@@ -3,12 +3,23 @@ import { lookup } from "node:dns/promises";
 import type { JobPosting, TargetCompany } from "../domain/opportunity.ts";
 import { extractJobs } from "./extract-jobs.ts";
 import { discoverEightfoldJobs, eightfoldConfig } from "./eightfold.ts";
+import { discoverGreenhouseJobs, greenhouseBoard } from "./greenhouse.ts";
+import { discoverJibeJobs, jibeConfig } from "./jibe.ts";
 
 export type ScanFailure = { companyId: string; sourceId: string; sourceUrl: string; message: string };
 export type ScanResult = { jobs: JobPosting[]; failures: ScanFailure[]; scannedAt: string; scannedSourceIds: string[] };
 
 export function isUnitedStatesJob(job: Pick<JobPosting, "locations">): boolean {
-  return job.locations.some((location) => /\b(?:United States(?: of America)?|USA|U\.S\.A\.|US)\b/i.test(location));
+  const states = "Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming|District of Columbia";
+  const stateCodes = "AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC";
+  return job.locations.some((location) => {
+    if (/\b(?:United States(?: of America)?|USA|U\.S\.A\.|US)\b/i.test(location)) return true;
+    // Three-part locations such as "Bengaluru, KA, IN" use IN as an ISO
+    // country code, while "Indianapolis, IN" uses it as a state code.
+    if (/,[ ]*[A-Z]{2},[ ]*IN$/i.test(location)) return false;
+    if (new RegExp(`(?:^|[,;/\\s])(?:${states})(?:$|[,;/\\s])`, "i").test(location)) return true;
+    return new RegExp(`(?:^|,\\s*)(?:${stateCodes})(?:$|[,;/\\s])`).test(location);
+  });
 }
 
 function isPrivateAddress(address: string): boolean {
@@ -74,12 +85,19 @@ export async function scanTargets(
     const sources = target.sources.filter((source) => source.enabled && source.kind !== "EVENTS").slice(0, 5);
     for (const source of sources) {
       try {
+        let discovered: JobPosting[];
         if (eightfoldConfig(target)) {
-          jobs.push(...await discoverEightfoldJobs(source, target, scannedAt, fetchJson));
+          discovered = await discoverEightfoldJobs(source, target, scannedAt, fetchJson);
+        } else if (greenhouseBoard(target)) {
+          discovered = await discoverGreenhouseJobs(source, target, scannedAt, fetchJson);
+        } else if (jibeConfig(target)) {
+          discovered = await discoverJibeJobs(source, target, scannedAt, fetchJson);
         } else {
           const html = await fetchPage(source.url);
-          jobs.push(...extractJobs(html, source, target, scannedAt));
+          discovered = extractJobs(html, source, target, scannedAt);
+          if (!discovered.length) throw new Error("Source loaded but no job records were extractable; provider adapter may be required.");
         }
+        jobs.push(...discovered);
         scannedSourceIds.push(source.id);
       } catch (error) {
         failures.push({ companyId: target.id, sourceId: source.id, sourceUrl: source.url, message: error instanceof Error ? error.message : "Unknown scan error." });

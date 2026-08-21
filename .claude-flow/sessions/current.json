@@ -1,13 +1,12 @@
 {
-  "id": "session-1786909328624",
-  "startedAt": "2026-08-16T19:42:08.624Z",
+  "id": "session-1787286012459",
+  "startedAt": "2026-08-21T04:20:12.459Z",
   "cwd": "/Users/codeharryson/Documents/Codex/jobfinder",
   "context": {},
   "metrics": {
-    "edits": 30,
+    "edits": 3,
     "commands": 0,
     "tasks": 0,
     "errors": 0
-  },
-  "restoredAt": "2026-08-19T15:40:42.155Z"
+  }
 }
