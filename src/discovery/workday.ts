@@ -11,7 +11,7 @@ const configs = new Map<string, WorkdayConfig>([
   ["autodesk", { origin: "https://autodesk.wd1.myworkdayjobs.com", tenant: "autodesk", site: "Ext" }],
   ["expedia", { origin: "https://expedia.wd108.myworkdayjobs.com", tenant: "expedia", site: "search" }],
   ["intel", { origin: "https://intel.wd1.myworkdayjobs.com", tenant: "intel", site: "External" }],
-  ["mastercard", { origin: "https://mastercard.wd1.myworkdayjobs.com", tenant: "mastercard", site: "CorporateCareers" }],
+  ["mastercard", { origin: "https://mastercard.wd1.myworkdayjobs.com", tenant: "mastercard", site: "Campus" }],
   ["workday", { origin: "https://workday.wd5.myworkdayjobs.com", tenant: "workday", site: "Workday" }],
 ]);
 
@@ -32,10 +32,15 @@ export function extractWorkdayJobs(payload: WorkdayResponse, config: WorkdayConf
   return payload.jobPostings.flatMap((record) => {
     const title = record.title?.trim() ?? "";
     if (!title || !record.externalPath) return [];
-    const canonicalUrl = new URL(record.externalPath, `${config.origin}/en-US/${config.site}`).toString();
+    const canonicalUrl = new URL(record.externalPath.replace(/^\/+/, ""), `${config.origin}/en-US/${config.site}/`).toString();
     const description = (record.bulletFields ?? []).join(" ").trim();
     if (!matchesTarget({ title, description }, target)) return [];
-    const locations = (record.locationsText ?? "").split(/\s*\|\s*|;\s*/).filter(Boolean);
+    const listedLocations = (record.locationsText ?? "").split(/\s*\|\s*|;\s*/).filter(Boolean);
+    const pathLocation = record.externalPath.match(/^\/job\/([^/]+)\//)?.[1]
+      ?.replace(/-([A-Z][a-z]+(?:-[A-Z][a-z]+)*)$/, ", $1").replaceAll("-", " ");
+    const locations = listedLocations.some((location) => /^\d+ Locations?$/i.test(location)) && pathLocation
+      ? [pathLocation]
+      : listedLocations;
     return [{
       kind: "JOB" as const, id: idFor(target.id, canonicalUrl), companyId: target.id, sourceId: source.id,
       sourceUrl: source.url, canonicalUrl, applicationUrl: canonicalUrl, title, description, locations,

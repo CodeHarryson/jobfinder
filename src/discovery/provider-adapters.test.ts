@@ -5,6 +5,7 @@ import { extractAshbyJobs } from "./ashby.ts";
 import { extractLeverJobs } from "./lever.ts";
 import { extractOracleHcmJobs, oracleHcmConfig } from "./oracle-hcm.ts";
 import { extractPhenomJobs, phenomConfig } from "./phenom.ts";
+import { isUnitedStatesJob } from "./scan-targets.ts";
 import { discoverWorkdayJobs, extractWorkdayJobs, workdayConfig, workdayDiscoveryQueries } from "./workday.ts";
 
 const source: TargetSource = { id: "source", kind: "CAREERS", url: "https://example.com/careers", enabled: true, scanCron: "* * * * *" };
@@ -52,6 +53,21 @@ test("uses precise Workday early-career queries before broad fallbacks", async (
   });
   assert.equal(jobs.length, 1);
   assert.equal(searches[0], "internship");
+});
+
+test("discovers Mastercard Campus launch and internship roles with multi-location labels", () => {
+  const company = target("Mastercard");
+  company.roleKeywords = ["intern", "internship", "new grad", "graduate", "early career", "university"];
+  const config = workdayConfig(company)!;
+  const jobs = extractWorkdayJobs({ total: 2, jobPostings: [
+    { title: "Software Engineer, Launch Program 2027 – United States", externalPath: "/job/OFallon-Missouri/Software-Engineer--Launch-Program-2027---United-States_R-288578-1", locationsText: "6 Locations", bulletFields: ["R-288578"] },
+    { title: "Software Engineer Intern, Summer 2027 – United States", externalPath: "/job/OFallon-Missouri/Software-Engineer-Intern--Summer-2027---United-States_R-287618-1", locationsText: "4 Locations", bulletFields: ["R-287618"] },
+  ] }, config, source, company, observedAt);
+  assert.equal(jobs.length, 2);
+  assert.deepEqual(jobs.map((job) => job.locations), [["OFallon, Missouri"], ["OFallon, Missouri"]]);
+  assert.deepEqual(jobs.map((job) => job.employmentType), ["NEW_GRAD", "INTERNSHIP"]);
+  assert.deepEqual(jobs.map(isUnitedStatesJob), [true, true]);
+  assert.match(jobs[0].canonicalUrl, /\/Campus\/job\//);
 });
 
 test("normalizes Phenom widget results", () => {
