@@ -59,10 +59,12 @@ test("upserts discovered jobs by company and canonical URL", () => {
 test("persists provider-level discovery health for the latest scan", () => {
   const repository = new JobFinderRepository();
   repository.recordScan({ startedAt: "2026-08-20T01:00:00.000Z", finishedAt: "2026-08-20T01:00:02.000Z",
-    targetCount: 1, jobCount: 3, failures: [], sourceResults: [{ provider: "GREENHOUSE", discoveredCount: 4, unitedStatesCount: 3 }] });
+    targetCount: 1, jobCount: 3, failures: [], sourceResults: [{ companyId: "company-1", provider: "GREENHOUSE", discoveredCount: 4, unitedStatesCount: 3 }] });
   const health = repository.getDiscoveryHealth();
   assert.equal(health?.jobCount, 3);
-  assert.deepEqual(health?.sourceResults, [{ provider: "GREENHOUSE", discoveredCount: 4, unitedStatesCount: 3 }]);
+  assert.deepEqual(health?.sourceResults, [{ companyId: "company-1", provider: "GREENHOUSE", discoveredCount: 4, unitedStatesCount: 3 }]);
+  assert.deepEqual(health?.companyHealth, [{ companyId: "company-1", lastAttemptedAt: "2026-08-20T01:00:00.000Z", status: "SUCCESS",
+    providers: ["GREENHOUSE"], discoveredCount: 4, unitedStatesCount: 3, errors: [] }]);
   repository.close();
 });
 

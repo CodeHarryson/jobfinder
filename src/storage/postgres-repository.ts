@@ -1,7 +1,6 @@
 import { Pool, type PoolClient } from "@neondatabase/serverless";
 import type { JobPosting, RecruitingEvent, TargetCompany, TargetSource } from "../domain/opportunity.ts";
-import type { Repository } from "./repository.ts";
-import type { DiscoveryHealth } from "./repository.ts";
+import { companyHealthFromHistory, type DiscoveryHealth, type Repository } from "./repository.ts";
 import type { DiscoveryChange, NotificationDelivery, NotificationItem } from "./jobfinder-repository.ts";
 
 type Row = Record<string, unknown>;
@@ -96,5 +95,5 @@ export class PostgresRepository implements Repository {
   async completeDiscordDelivery(id:string,externalId:string){await(await this.db()).query("UPDATE notification_deliveries SET status='SENT',external_id=$1,last_error=NULL,updated_at=now() WHERE id=$2",[externalId,id]);}
   async failDiscordDelivery(id:string,attempts:number,error:string){const delays=[60_000,300_000,900_000,3_600_000];const next=new Date(Date.now()+delays[Math.min(attempts-1,delays.length-1)]);await(await this.db()).query("UPDATE notification_deliveries SET status='FAILED',next_attempt_at=$1,last_error=$2,updated_at=now() WHERE id=$3",[next.toISOString(),error.slice(0,500),id]);}
   async recordScan(input:{startedAt:string;finishedAt:string;targetCount:number;jobCount:number;failures:unknown[];sourceResults?:unknown[]}){await(await this.db()).query("INSERT INTO scan_runs(id,started_at,finished_at,target_count,job_count,failure_count,failures,source_results) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb)",[crypto.randomUUID(),input.startedAt,input.finishedAt,input.targetCount,input.jobCount,input.failures.length,JSON.stringify(input.failures),JSON.stringify(input.sourceResults??[])]);}
-  async getDiscoveryHealth():Promise<DiscoveryHealth|null>{const result=await(await this.db()).query("SELECT * FROM scan_runs ORDER BY started_at DESC LIMIT 1");const row=result.rows[0] as Row|undefined;return row?{startedAt:new Date(String(row.started_at)).toISOString(),finishedAt:new Date(String(row.finished_at)).toISOString(),targetCount:Number(row.target_count),jobCount:Number(row.job_count),failureCount:Number(row.failure_count),failures:row.failures as unknown[],sourceResults:row.source_results as unknown[]}:null;}
+  async getDiscoveryHealth():Promise<DiscoveryHealth|null>{const result=await(await this.db()).query("SELECT * FROM scan_runs ORDER BY started_at DESC LIMIT 100");const row=result.rows[0] as Row|undefined;return row?{startedAt:new Date(String(row.started_at)).toISOString(),finishedAt:new Date(String(row.finished_at)).toISOString(),targetCount:Number(row.target_count),jobCount:Number(row.job_count),failureCount:Number(row.failure_count),failures:row.failures as unknown[],sourceResults:row.source_results as unknown[],companyHealth:companyHealthFromHistory(result.rows.map((scan:Row)=>({startedAt:new Date(String(scan.started_at)).toISOString(),failures:scan.failures as unknown[],sourceResults:scan.source_results as unknown[]})))}:null;}
 }

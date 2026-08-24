@@ -5,7 +5,7 @@ import { extractAshbyJobs } from "./ashby.ts";
 import { extractLeverJobs } from "./lever.ts";
 import { extractOracleHcmJobs, oracleHcmConfig } from "./oracle-hcm.ts";
 import { extractPhenomJobs, phenomConfig } from "./phenom.ts";
-import { extractWorkdayJobs, workdayConfig } from "./workday.ts";
+import { discoverWorkdayJobs, extractWorkdayJobs, workdayConfig, workdayDiscoveryQueries } from "./workday.ts";
 
 const source: TargetSource = { id: "source", kind: "CAREERS", url: "https://example.com/careers", enabled: true, scanCron: "* * * * *" };
 const target = (name: string): TargetCompany => ({
@@ -35,6 +35,23 @@ test("normalizes Workday result pages", () => {
     locationsText: "US, California, Santa Clara | US, Oregon, Hillsboro", bulletFields: ["Student role"] }] }, config, source, company, observedAt);
   assert.equal(jobs.length, 1);
   assert.match(jobs[0].canonicalUrl, /intel\.wd1\.myworkdayjobs\.com/);
+});
+
+test("uses precise Workday early-career queries before broad fallbacks", async () => {
+  const company = target("Mastercard");
+  company.roleKeywords = ["intern", "internship", "new grad", "graduate", "early career", "university"];
+  assert.deepEqual(workdayDiscoveryQueries(company), ["internship", "intern", "graduate", "early career", "new grad"]);
+
+  const searches: string[] = [];
+  const jobs = await discoverWorkdayJobs(source, company, observedAt, async (_url, init) => {
+    const searchText = String(JSON.parse(String(init?.body)).searchText);
+    searches.push(searchText);
+    return searchText === "internship"
+      ? { total: 1, jobPostings: [{ title: "Software Engineering Intern", externalPath: "/job/US_R123", locationsText: "O'Fallon, Missouri" }] }
+      : { total: 0, jobPostings: [] };
+  });
+  assert.equal(jobs.length, 1);
+  assert.equal(searches[0], "internship");
 });
 
 test("normalizes Phenom widget results", () => {

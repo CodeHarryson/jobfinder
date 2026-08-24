@@ -19,6 +19,14 @@ export function workdayConfig(target: TargetCompany): WorkdayConfig | null {
   return configs.get(target.name.trim().toLowerCase()) ?? null;
 }
 
+export function workdayDiscoveryQueries(target: TargetCompany): string[] {
+  return [...new Set(discoveryQueries(target).flatMap((query) => {
+    if (query === "intern") return ["internship", "intern"];
+    if (query === "new grad") return ["graduate", "early career", "new grad"];
+    return [query];
+  }))];
+}
+
 export function extractWorkdayJobs(payload: WorkdayResponse, config: WorkdayConfig, source: TargetSource, target: TargetCompany, observedAt: string): JobPosting[] {
   if (!Array.isArray(payload.jobPostings)) throw new Error("Workday API returned an invalid response.");
   return payload.jobPostings.flatMap((record) => {
@@ -42,7 +50,7 @@ export async function discoverWorkdayJobs(source: TargetSource, target: TargetCo
   if (!config) return [];
   const endpoint = `${config.origin}/wday/cxs/${config.tenant}/${config.site}/jobs`;
   const jobs: JobPosting[] = [];
-  for (const searchText of discoveryQueries(target)) {
+  for (const searchText of workdayDiscoveryQueries(target)) {
     let offset = 0;
     let total = 0;
     do {

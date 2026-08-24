@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { JobPosting, RecruitingEvent, SourceKind, TargetCompany, TargetSource } from "../domain/opportunity.ts";
-import type { DiscoveryHealth } from "./repository.ts";
+import { companyHealthFromHistory, type DiscoveryHealth } from "./repository.ts";
 
 type CompanyRow = { id: string; name: string; domain: string; priority: string; role_keywords: string; event_keywords: string; created_at: string };
 type SourceRow = { id: string; company_id: string; kind: string; url: string; enabled: number; scan_cron: string };
@@ -255,10 +255,14 @@ export class JobFinderRepository {
   }
 
   getDiscoveryHealth(): DiscoveryHealth | null {
-    const row = this.db.prepare("SELECT * FROM scan_runs ORDER BY started_at DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+    const rows = this.db.prepare("SELECT * FROM scan_runs ORDER BY started_at DESC LIMIT 100").all() as Record<string, unknown>[];
+    const row = rows[0];
     return row ? { startedAt: String(row.started_at), finishedAt: String(row.finished_at), targetCount: Number(row.target_count),
       jobCount: Number(row.job_count), failureCount: Number(row.failure_count), failures: JSON.parse(String(row.failures)) as unknown[],
-      sourceResults: JSON.parse(String(row.source_results)) as unknown[] } : null;
+      sourceResults: JSON.parse(String(row.source_results)) as unknown[], companyHealth: companyHealthFromHistory(rows.map((scan) => ({
+        startedAt: String(scan.started_at), failures: JSON.parse(String(scan.failures)) as unknown[],
+        sourceResults: JSON.parse(String(scan.source_results)) as unknown[],
+      }))) } : null;
   }
 
   close() { this.db.close(); }
