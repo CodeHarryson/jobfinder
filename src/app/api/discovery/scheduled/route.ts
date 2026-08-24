@@ -26,7 +26,19 @@ export async function GET(request: Request) {
   const batch = selectScanBatch(dueTargets, now);
 
   try {
-    return NextResponse.json({ ...await runDiscoveryScan(repository, batch.targets), batchIndex: batch.batchIndex, batchCount: batch.batchCount, totalDueTargets: dueTargets.length });
+    const result = await runDiscoveryScan(repository, batch.targets);
+    return NextResponse.json({
+      ok: true,
+      scannedAt: result.scannedAt,
+      jobsFound: result.jobs.length,
+      changesFound: result.changes.length,
+      sourcesScanned: result.sourceResults.length,
+      sourcesFailed: result.failures.length,
+      notifications: result.delivery,
+      batchIndex: batch.batchIndex,
+      batchCount: batch.batchCount,
+      totalDueTargets: dueTargets.length,
+    });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Scheduled scan failed." }, { status: 500 });
   }
