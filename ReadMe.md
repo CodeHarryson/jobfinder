@@ -61,6 +61,23 @@ The in-app notification inbox is available from the dashboard. It shows unread c
 
 Discord is the primary out-of-app delivery channel. Set `DISCORD_WEBHOOK_URL` as a server-only Vercel environment variable. New and materially updated roles are queued in a durable outbox, sent as rich Discord embeds, deduplicated by notification and channel, and retried with exponential backoff after transient failures. The Vercel Hobby-compatible cron runs daily at 13:00 UTC; Pro deployments can change `vercel.json` to `* * * * *` for one-minute discovery.
 
+## Gmail application tracking
+
+The Gmail-first application tracker runs independently from job discovery, so existing discovery scans and Discord notifications are unchanged. A durable Inngest function checks Gmail every five minutes, classifies application confirmations, assessments, interview requests, scheduled interviews, rejections, and offers, and deduplicates messages by Gmail message ID. Only metadata, a short Gmail snippet, classification evidence, and scheduling facts are stored; full message bodies and OAuth tokens are not stored in plaintext.
+
+Create a Google Cloud OAuth web client, enable the Gmail API and Google Calendar API, and configure the variables in `.env.example`. Add these authorized redirect URIs:
+
+- `http://localhost:3000/api/google/callback`
+- `https://jobfinder-fawn-phi.vercel.app/api/google/callback`
+
+Then open `/api/google/connect` to authorize the single account named by `GMAIL_ALLOWED_EMAIL`. The requested Gmail scope is read-only. Calendar access is limited to events and free/busy data. The current safety policy creates preparation-block proposals for detected OA/interview dates; it does not write calendar events until a later approval endpoint is added.
+
+Protected operational endpoints use `Authorization: Bearer $CRON_SECRET` in production:
+
+- `GET /api/google/status` returns connection, classification, and proposal counts.
+- `POST /api/google/sync` queues an immediate Gmail sync.
+- `/api/inngest` serves the durable five-minute sync function.
+
 Validation commands:
 
 ```bash
