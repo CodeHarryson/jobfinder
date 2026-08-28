@@ -36,13 +36,14 @@ export function idFor(companyId: string, url: string): string {
 export function employmentType(title: string, rawType = ""): JobPosting["employmentType"] {
   const text = `${title} ${rawType}`.toLowerCase();
   if (/\b(?:intern|internship|co[ -]?op)\b/.test(text)) return "INTERNSHIP";
-  if (/\b(?:new grad(?:uate)?|graduate (?:role|program)|graduate .{0,30}\b(?:engineer|developer)|launch program|entry[ -]level)\b/.test(text)) return "NEW_GRAD";
+  if (/\b(?:new grad(?:uate)?|university graduate|college grad|graduate (?:role|program)|graduate .{0,30}\b(?:engineer|developer)|launch program|entry[ -]level|amts)\b/.test(text)) return "NEW_GRAD";
   if (/\b(?:early career|apprentice|apprenticeship)\b/.test(text)) return "EARLY_CAREER";
   return "OTHER";
 }
 
 const INTERNSHIP_ROLE = /\b(?:intern|internship|co[ -]?op)\b/i;
-const NEW_GRAD_ROLE = /\b(?:new grad(?:uate)?|graduate (?:role|program)|graduate .{0,30}\b(?:engineer|developer)|launch program|entry[ -]level)\b/i;
+const NEW_GRAD_ROLE = /\b(?:new grad(?:uate)?|university graduate|college grad|graduate (?:role|program)|graduate .{0,30}\b(?:engineer|developer)|launch program|entry[ -]level|early career|amts)\b/i;
+const STUDENT_RESEARCH_ROLE = /\bstudent researcher\b/i;
 const NON_UNDERGRAD_INTERNSHIP = /\b(?:master(?:'s|s)?|mba|ph\.?d\.?|doctoral|doctorate|post[ -]?doc(?:toral)?|graduate .{0,30}\bintern|high school|secondary school)\b/i;
 const HIRING_TEAM_ROLE = /\b(?:recruiter|recruiting|talent acquisition|campus recruiting|university recruiting|program manager)\b|\bmanager\b.*\bintern(?:ship)? program\b/i;
 const NAVIGATION_TITLE = /^(?:early careers?|internships?(?: for students)?|university recruiting|explore |find |view |search jobs?|watch (?:the )?film)/i;
@@ -51,6 +52,7 @@ function isEligibleEarlyCareerTitle(title: string): boolean {
   const normalized = title.trim();
   if (HIRING_TEAM_ROLE.test(normalized) || NAVIGATION_TITLE.test(normalized)) return false;
   if (NEW_GRAD_ROLE.test(normalized)) return true;
+  if (STUDENT_RESEARCH_ROLE.test(normalized)) return !NON_UNDERGRAD_INTERNSHIP.test(normalized);
   return INTERNSHIP_ROLE.test(normalized) && !NON_UNDERGRAD_INTERNSHIP.test(normalized);
 }
 

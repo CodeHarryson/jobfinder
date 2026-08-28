@@ -10,6 +10,9 @@ import { discoverLeverJobs, leverSite } from "./lever.ts";
 import { discoverWorkdayJobs, workdayConfig } from "./workday.ts";
 import { discoverPhenomJobs, phenomConfig } from "./phenom.ts";
 import { discoverOracleHcmJobs, oracleHcmConfig } from "./oracle-hcm.ts";
+import { discoverAmazonJobs, isAmazon } from "./amazon.ts";
+import { discoverSalesforceJobs, isSalesforce } from "./salesforce.ts";
+import { discoverGoogleCareersJobs, isGoogleCareers } from "./google-careers.ts";
 
 export type ScanFailure = { companyId: string; sourceId: string; sourceUrl: string; provider: string; message: string };
 export type SourceScanResult = {
@@ -110,7 +113,16 @@ export async function scanTargets(
       let provider = "UNRESOLVED";
       try {
         let discovered: JobPosting[];
-        if (eightfoldConfig(target)) {
+        if (isAmazon(target)) {
+          provider = "AMAZON_JOBS";
+          discovered = await discoverAmazonJobs(source, target, scannedAt, fetchJson);
+        } else if (isSalesforce(target)) {
+          provider = "SALESFORCE_CAREERS";
+          discovered = await discoverSalesforceJobs(source, target, scannedAt, fetchJson);
+        } else if (isGoogleCareers(target)) {
+          provider = "GOOGLE_CAREERS";
+          discovered = await discoverGoogleCareersJobs(source, target, scannedAt, fetchPage);
+        } else if (eightfoldConfig(target)) {
           provider = "EIGHTFOLD";
           discovered = await discoverEightfoldJobs(source, target, scannedAt, fetchJson);
         } else if (greenhouseBoard(target)) {
