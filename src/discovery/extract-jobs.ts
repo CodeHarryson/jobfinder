@@ -36,6 +36,7 @@ export function idFor(companyId: string, url: string): string {
 export function employmentType(title: string, rawType = ""): JobPosting["employmentType"] {
   const text = `${title} ${rawType}`.toLowerCase();
   if (/\b(?:intern|internship|co[ -]?op)\b/.test(text)) return "INTERNSHIP";
+  if (/\bstudent researcher\b/.test(text)) return "EARLY_CAREER";
   if (/\b(?:new grad(?:uate)?|university graduate|college grad|graduate (?:role|program)|graduate .{0,30}\b(?:engineer|developer)|launch program|entry[ -]level|amts)\b/.test(text)) return "NEW_GRAD";
   if (/\b(?:early career|apprentice|apprenticeship)\b/.test(text)) return "EARLY_CAREER";
   return "OTHER";

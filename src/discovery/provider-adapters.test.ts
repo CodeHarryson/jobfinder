@@ -118,7 +118,7 @@ test("normalizes Salesforce's published careers dataset including college-grad r
   }] }, source, company, observedAt);
   assert.equal(isSalesforce(company), true);
   assert.equal(jobs.length, 1);
-  assert.deepEqual(jobs[0].locations, ["California - San Francisco", "San Francisco, California, United States"]);
+  assert.deepEqual(jobs[0].locations, ["San Francisco, California, United States"]);
   assert.equal(jobs[0].employmentType, "NEW_GRAD");
 });
 

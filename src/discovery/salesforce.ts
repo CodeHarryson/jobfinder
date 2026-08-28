@@ -23,7 +23,13 @@ export function extractSalesforceJobs(payload: SalesforceResponse, source: Targe
     if (!matchesTarget({ title, description }, target)) return [];
     const canonicalUrl = `https://careers.salesforce.com/en/jobs/${requisition.toLowerCase()}/${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
     const primary = record.Job_Requisition_Primary_Location?.trim() ?? "";
-    const jobLocations = [...new Set([primary, ...(record.Locations ?? []).map((location, index) => [location, record.Regions?.[index], record.Countries?.[index]].filter(Boolean).join(", "))].filter(Boolean))];
+    const country = record.Countries?.length === 1 ? record.Countries[0] : "";
+    const primaryParts = primary.split(" - ").map((part) => part.trim()).filter(Boolean);
+    const normalizedPrimary = primaryParts.length === 2 ? [primaryParts[1], primaryParts[0], country].filter(Boolean).join(", ") : [primary, country].filter(Boolean).join(", ");
+    const secondary = (record.Locations ?? [])
+      .filter((location) => !normalizedPrimary.toLowerCase().startsWith(`${location.trim().toLowerCase()},`))
+      .map((location) => [location, country].filter(Boolean).join(", "));
+    const jobLocations = [...new Set([normalizedPrimary, ...secondary].filter(Boolean))];
     return [{
       kind: "JOB" as const, id: idFor(target.id, canonicalUrl), companyId: target.id, sourceId: source.id,
       sourceUrl: source.url, canonicalUrl, applicationUrl: externalUrl, title, description, locations: jobLocations,
@@ -39,4 +45,3 @@ export async function discoverSalesforceJobs(source: TargetSource, target: Targe
   try { return extractSalesforceJobs(await fetchJson(primary) as SalesforceResponse, source, target, observedAt); }
   catch { return extractSalesforceJobs(await fetchJson("https://a.sfdcstatic.com/digital/xsf/careers/prod/jobs_1_backup.json") as SalesforceResponse, source, target, observedAt); }
 }
-

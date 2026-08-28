@@ -8,7 +8,7 @@ export function extractGoogleCareersJobs(html: string, source: TargetSource, tar
   const $ = load(html);
   const jobs: JobPosting[] = [];
   $('a[href*="jobs/results/"]').each((_, link) => {
-    const card = $(link).closest(".ObfsIf-eEDwDf");
+    const card = $(link).parents().filter((_, element) => $(element).find("h3.QJPWVe").length > 0 && $(element).find(".r0wTof").length > 0).first();
     const title = (card.find("h3.QJPWVe").first().text() || $(link).attr("aria-label")?.replace(/^Learn more about\s+/i, "") || "").trim();
     const href = $(link).attr("href") ?? "";
     if (!title || !/jobs\/results\/\d+-/.test(href)) return;
@@ -35,4 +35,3 @@ export async function discoverGoogleCareersJobs(source: TargetSource, target: Ta
   }
   return [...new Map(jobs.map((job) => [job.canonicalUrl, job])).values()];
 }
-
