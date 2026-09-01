@@ -22,6 +22,7 @@ const boardByCompany = new Map(Object.entries({
   "discord": "discord", "dropbox": "dropbox", "duolingo": "duolingo", "elastic": "elastic",
   "figma": "figma", "five rings": "fiveringsllc", "gitlab": "gitlab", "godaddy": "godaddy",
   "grafana labs": "grafanalabs", "imc": "imc",
+  "hp iq": "hpiq",
   "jane street": "janestreet", "jump trading": "jumptrading", "linkedin": "linkedin", "mongodb": "mongodb",
   "okta": "okta", "pinterest": "pinterest", "reddit": "reddit", "robinhood": "robinhood",
   "roblox": "roblox", "samsung semiconductor": "samsungsemiconductor", "scale ai": "scaleai", "sofi": "sofi",
@@ -62,9 +63,12 @@ export function extractGreenhouseJobs(
     if (!matchesTarget({ title, description }, target)) return [];
     const jobLocations = locations(record);
     const department = (record.departments ?? []).map(({ name }) => name).filter(Boolean).join(", ");
+    const applicationUrl = target.name.trim().toLowerCase() === "stripe" && record.id
+      ? `https://job-boards.greenhouse.io/embed/job_app?for=stripe&token=${record.id}`
+      : url;
     return [{
       kind: "JOB" as const, id: idFor(target.id, url), companyId: target.id, sourceId: source.id,
-      sourceUrl: source.url, canonicalUrl: url, applicationUrl: url, title, description,
+      sourceUrl: source.url, canonicalUrl: url, applicationUrl, title, description,
       locations: jobLocations, employmentType: employmentType(title, department),
       firstSeenAt: observedAt, lastSeenAt: observedAt,
       contentFingerprint: fingerprint(title, description, url, jobLocations.join("|")), extractionConfidence: 0.99,

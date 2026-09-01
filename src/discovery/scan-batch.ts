@@ -8,15 +8,14 @@ export const PRIORITY_COMPANY_NAMES = [
 
 const priorityNames = new Set(PRIORITY_COMPANY_NAMES.map((name) => name.toLowerCase()));
 
-export function selectScanBatch(targets: TargetCompany[], now = new Date(), batchSize = 25, intervalMs = 300_000) {
+export function selectScanBatch(targets: TargetCompany[], cursor = 0, batchSize = 25) {
   if (targets.length <= batchSize) return { targets, batchIndex: 0, batchCount: targets.length ? 1 : 0 };
   const priorityTargets = targets.filter((target) => priorityNames.has(target.name.trim().toLowerCase()));
   const standardTargets = targets.filter((target) => !priorityNames.has(target.name.trim().toLowerCase()));
   if (priorityTargets.length && standardTargets.length) {
-    const intervalIndex = Math.floor(now.getTime() / intervalMs);
-    const selectedPool = intervalIndex % 2 === 0 ? priorityTargets : standardTargets;
+    const selectedPool = cursor % 2 === 0 ? priorityTargets : standardTargets;
     const batchCount = Math.ceil(selectedPool.length / batchSize);
-    const batchIndex = Math.floor(intervalIndex / 2) % batchCount;
+    const batchIndex = Math.floor(cursor / 2) % batchCount;
     return {
       targets: selectedPool.slice(batchIndex * batchSize, (batchIndex + 1) * batchSize),
       batchIndex,
@@ -24,6 +23,6 @@ export function selectScanBatch(targets: TargetCompany[], now = new Date(), batc
     };
   }
   const batchCount = Math.ceil(targets.length / batchSize);
-  const batchIndex = Math.floor(now.getTime() / intervalMs) % batchCount;
+  const batchIndex = cursor % batchCount;
   return { targets: targets.slice(batchIndex * batchSize, (batchIndex + 1) * batchSize), batchIndex, batchCount };
 }

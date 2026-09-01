@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { JobPosting, RecruitingEvent, SourceKind, TargetCompany, TargetSource } from "../domain/opportunity.ts";
-import { companyHealthFromHistory, type DiscoveryHealth } from "./repository.ts";
+import { companyHealthFromHistory, isMaterialJobUpdate, type DiscoveryHealth } from "./repository.ts";
 
 type CompanyRow = { id: string; name: string; domain: string; priority: string; role_keywords: string; event_keywords: string; created_at: string };
 type SourceRow = { id: string; company_id: string; kind: string; url: string; enabled: number; scan_cron: string };
@@ -69,6 +69,7 @@ export class JobFinderRepository {
         next_attempt_at TEXT NOT NULL, last_error TEXT, external_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
         UNIQUE(change_id, channel)
       );
+      CREATE TABLE IF NOT EXISTS discovery_state (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS job_postings_last_seen_idx ON job_postings(last_seen_at DESC);
     `);
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(job_postings)").all() as Array<{ name: string }>).map(({ name }) => name));
@@ -76,6 +77,20 @@ export class JobFinderRepository {
     if (!jobColumns.has("missed_scans")) this.db.exec("ALTER TABLE job_postings ADD COLUMN missed_scans INTEGER NOT NULL DEFAULT 0");
     const scanColumns = new Set((this.db.prepare("PRAGMA table_info(scan_runs)").all() as Array<{ name: string }>).map(({ name }) => name));
     if (!scanColumns.has("source_results")) this.db.exec("ALTER TABLE scan_runs ADD COLUMN source_results TEXT NOT NULL DEFAULT '[]'");
+  }
+
+  reserveScanCursor(): number {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db.prepare("SELECT value FROM discovery_state WHERE key='scan_cursor'").get() as { value: number } | undefined;
+      const cursor = row?.value ?? 0;
+      this.db.prepare("INSERT INTO discovery_state(key,value) VALUES('scan_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(cursor + 1);
+      this.db.exec("COMMIT");
+      return cursor;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   listTargets(): TargetCompany[] {
@@ -147,7 +162,7 @@ export class JobFinderRepository {
       application_url=excluded.application_url,title=excluded.title,description=excluded.description,locations=excluded.locations,
       employment_type=excluded.employment_type,last_seen_at=excluded.last_seen_at,content_fingerprint=excluded.content_fingerprint,
       extraction_confidence=excluded.extraction_confidence,active=1,missed_scans=0`);
-    const find = this.db.prepare("SELECT id, content_fingerprint FROM job_postings WHERE company_id = ? AND canonical_url = ?");
+    const find = this.db.prepare("SELECT id,title,application_url,locations,employment_type FROM job_postings WHERE company_id = ? AND canonical_url = ?");
     const insertChange = this.db.prepare("INSERT INTO discovery_changes(id,job_id,company_id,kind,created_at,read_at) VALUES(?,?,?,?,?,NULL)");
     const changes: DiscoveryChange[] = [];
     this.db.exec("BEGIN IMMEDIATE");
@@ -159,10 +174,11 @@ export class JobFinderRepository {
         for (const row of existing) if (!seenUrls.has(row.canonical_url)) miss.run(sourceId, row.canonical_url);
       }
       for (const job of jobs) {
-        const existing = find.get(job.companyId, job.canonicalUrl) as { id: string; content_fingerprint: string } | undefined;
+        const existing = find.get(job.companyId, job.canonicalUrl) as { id: string; title: string; application_url: string; locations: string; employment_type: JobPosting["employmentType"] } | undefined;
         statement.run(job.id, job.companyId, job.sourceId, job.sourceUrl, job.canonicalUrl, job.applicationUrl, job.title, job.description,
           JSON.stringify(job.locations), job.employmentType, existing ? this.listJobFirstSeen(existing.id) : job.firstSeenAt, job.lastSeenAt, job.contentFingerprint, job.extractionConfidence);
-        const kind = !existing ? "NEW" : existing.content_fingerprint !== job.contentFingerprint ? "UPDATED" : null;
+        const kind = !existing ? "NEW" : isMaterialJobUpdate({ title: existing.title, applicationUrl: existing.application_url,
+          locations: JSON.parse(existing.locations) as string[], employmentType: existing.employment_type }, job) ? "UPDATED" : null;
         if (kind) {
           const change = { id: crypto.randomUUID(), jobId: existing?.id ?? job.id, companyId: job.companyId, kind, createdAt: job.lastSeenAt, readAt: null } satisfies DiscoveryChange;
           insertChange.run(change.id, change.jobId, change.companyId, change.kind, change.createdAt);

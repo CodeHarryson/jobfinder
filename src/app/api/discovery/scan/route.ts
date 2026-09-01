@@ -16,7 +16,7 @@ export async function POST(request: Request) {
     const targets = suppliedTargets.length ? suppliedTargets : await repository.listTargets();
     if (!targets.length) return NextResponse.json({ error: "No target companies are configured." }, { status: 400 });
     if (suppliedTargets.length) await repository.saveTargets(suppliedTargets);
-    const batch = selectScanBatch(targets);
+    const batch = selectScanBatch(targets, await repository.reserveScanCursor());
     const result = await runDiscoveryScan(repository, batch.targets);
     return NextResponse.json({ ...result, batchIndex: batch.batchIndex, batchCount: batch.batchCount, totalTargets: targets.length });
   } catch (error) {

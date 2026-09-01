@@ -37,6 +37,8 @@ test("upserts discovered jobs by company and canonical URL", () => {
   };
   assert.equal(repository.saveJobs([job])[0].kind, "NEW");
   assert.equal(repository.saveJobs([job]).length, 0);
+  assert.equal(repository.saveJobs([{ ...job, description: "Formatting-only upstream change", contentFingerprint: "description-only" }]).length, 0,
+    "description-only changes do not create noisy alerts");
   assert.equal(repository.saveJobs([{ ...job, title: "Software Engineering Intern", description: "Updated", contentFingerprint: "two", lastSeenAt: "2026-08-16T01:00:00.000Z" }])[0].kind, "UPDATED");
   assert.equal(repository.listJobs().length, 1);
   assert.equal(repository.listJobs()[0].title, "Software Engineering Intern");
@@ -53,6 +55,12 @@ test("upserts discovered jobs by company and canonical URL", () => {
   assert.equal(repository.listJobs().length, 1, "one missed scan keeps the role active");
   repository.saveJobs([], [created.value.sources[0].id]);
   assert.equal(repository.listJobs().length, 0, "two consecutive missed scans mark the role inactive");
+  repository.close();
+});
+
+test("reserves a durable scan cursor for every invocation", () => {
+  const repository = new JobFinderRepository();
+  assert.deepEqual([repository.reserveScanCursor(), repository.reserveScanCursor(), repository.reserveScanCursor()], [0, 1, 2]);
   repository.close();
 });
 

@@ -73,6 +73,7 @@ const companies = [
   ["Cisco","cisco.com","https://jobs.cisco.com/"],
   ["Intel","intel.com","https://jobs.intel.com/"],
   ["HPE","hpe.com","https://careers.hpe.com/us/en"],
+  ["HP IQ","hp-iq.com","https://www.hp-iq.com/join-us"],
   ["Dell","dell.com","https://jobs.dell.com/"],
   ["Samsung Semiconductor","samsung.com","https://semiconductor.samsung.com/us/careers/"],
   ["Capital One","capitalone.com","https://www.capitalonecareers.com/"],

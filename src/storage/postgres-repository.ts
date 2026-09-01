@@ -1,6 +1,6 @@
 import { Pool, type PoolClient } from "@neondatabase/serverless";
 import type { JobPosting, RecruitingEvent, TargetCompany, TargetSource } from "../domain/opportunity.ts";
-import { companyHealthFromHistory, type DiscoveryHealth, type Repository } from "./repository.ts";
+import { companyHealthFromHistory, isMaterialJobUpdate, type DiscoveryHealth, type Repository } from "./repository.ts";
 import type { DiscoveryChange, NotificationDelivery, NotificationItem } from "./jobfinder-repository.ts";
 
 type Row = Record<string, unknown>;
@@ -21,6 +21,7 @@ export class PostgresRepository implements Repository {
         CREATE TABLE IF NOT EXISTS scan_runs(id text PRIMARY KEY,started_at timestamptz NOT NULL,finished_at timestamptz NOT NULL,target_count integer NOT NULL,job_count integer NOT NULL,failure_count integer NOT NULL,failures jsonb NOT NULL);
         CREATE TABLE IF NOT EXISTS discovery_changes(id text PRIMARY KEY,job_id text NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,company_id text NOT NULL REFERENCES target_companies(id) ON DELETE CASCADE,kind text NOT NULL,created_at timestamptz NOT NULL,read_at timestamptz,UNIQUE(job_id,kind,created_at));
         CREATE TABLE IF NOT EXISTS notification_deliveries(id text PRIMARY KEY,change_id text NOT NULL REFERENCES discovery_changes(id) ON DELETE CASCADE,channel text NOT NULL,status text NOT NULL,attempts integer NOT NULL DEFAULT 0,next_attempt_at timestamptz NOT NULL,last_error text,external_id text,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL,UNIQUE(change_id,channel));
+        CREATE TABLE IF NOT EXISTS discovery_state(key text PRIMARY KEY,value bigint NOT NULL);
         CREATE INDEX IF NOT EXISTS job_postings_last_seen_idx ON job_postings(last_seen_at DESC);
         CREATE UNIQUE INDEX IF NOT EXISTS target_companies_name_unique_idx ON target_companies(lower(name));
         ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true;
@@ -30,6 +31,12 @@ export class PostgresRepository implements Repository {
       this.migrated = true;
     }
     return this.pool;
+  }
+
+  async reserveScanCursor(): Promise<number> {
+    const result = await (await this.db()).query(`INSERT INTO discovery_state(key,value) VALUES('scan_cursor',1)
+      ON CONFLICT(key) DO UPDATE SET value=discovery_state.value+1 RETURNING value-1 AS cursor`);
+    return Number(result.rows[0].cursor);
   }
 
   async listTargets(): Promise<TargetCompany[]> {
@@ -76,9 +83,10 @@ export class PostgresRepository implements Repository {
           WHERE source_id=$1 AND active=true AND NOT (canonical_url=ANY($2::text[]))`, [sourceId, seenUrls]);
       }
       for (const job of jobs) {
-        const found=await client.query("SELECT id,content_fingerprint,first_seen_at FROM job_postings WHERE company_id=$1 AND canonical_url=$2 FOR UPDATE",[job.companyId,job.canonicalUrl]); const existing=found.rows[0] as Row|undefined;
+        const found=await client.query("SELECT id,first_seen_at,title,application_url,locations,employment_type FROM job_postings WHERE company_id=$1 AND canonical_url=$2 FOR UPDATE",[job.companyId,job.canonicalUrl]); const existing=found.rows[0] as Row|undefined;
         await client.query(`INSERT INTO job_postings(id,company_id,source_id,source_url,canonical_url,application_url,title,description,locations,employment_type,first_seen_at,last_seen_at,content_fingerprint,extraction_confidence,active,missed_scans) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13,$14,true,0) ON CONFLICT(company_id,canonical_url) DO UPDATE SET source_id=excluded.source_id,source_url=excluded.source_url,application_url=excluded.application_url,title=excluded.title,description=excluded.description,locations=excluded.locations,employment_type=excluded.employment_type,last_seen_at=excluded.last_seen_at,content_fingerprint=excluded.content_fingerprint,extraction_confidence=excluded.extraction_confidence,active=true,missed_scans=0`,[job.id,job.companyId,job.sourceId,job.sourceUrl,job.canonicalUrl,job.applicationUrl,job.title,job.description,JSON.stringify(job.locations),job.employmentType,existing?.first_seen_at??job.firstSeenAt,job.lastSeenAt,job.contentFingerprint,job.extractionConfidence]);
-        const kind=!existing?"NEW":existing.content_fingerprint!==job.contentFingerprint?"UPDATED":null;
+        const kind=!existing?"NEW":isMaterialJobUpdate({title:String(existing.title),applicationUrl:String(existing.application_url),
+          locations:existing.locations as string[],employmentType:existing.employment_type as JobPosting["employmentType"]},job)?"UPDATED":null;
         if(kind){const change={id:crypto.randomUUID(),jobId:String(existing?.id??job.id),companyId:job.companyId,kind,createdAt:job.lastSeenAt,readAt:null} satisfies DiscoveryChange;await client.query("INSERT INTO discovery_changes(id,job_id,company_id,kind,created_at) VALUES($1,$2,$3,$4,$5)",[change.id,change.jobId,change.companyId,change.kind,change.createdAt]);changes.push(change);}
       }
       await client.query("COMMIT"); return changes;

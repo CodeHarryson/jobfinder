@@ -51,6 +51,7 @@ export function companyHealthFromHistory(history: ScanHistoryEntry[]): CompanyDi
 }
 
 export interface Repository {
+  reserveScanCursor(): Promise<number>;
   listTargets(): Promise<TargetCompany[]>;
   saveTarget(target: TargetCompany): Promise<TargetCompany>;
   saveTargets(targets: TargetCompany[]): Promise<TargetCompany[]>;
@@ -69,4 +70,14 @@ export interface Repository {
   failDiscordDelivery(id: string, attempts: number, error: string): Promise<void>;
   recordScan(input: { startedAt: string; finishedAt: string; targetCount: number; jobCount: number; failures: unknown[]; sourceResults?: unknown[] }): Promise<void>;
   getDiscoveryHealth(): Promise<DiscoveryHealth | null>;
+}
+
+type MaterialJobFields = Pick<JobPosting, "title" | "applicationUrl" | "locations" | "employmentType">;
+
+export function isMaterialJobUpdate(existing: MaterialJobFields, incoming: MaterialJobFields): boolean {
+  const locations = (values: string[]) => [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))].sort();
+  return existing.title.trim() !== incoming.title.trim()
+    || existing.applicationUrl !== incoming.applicationUrl
+    || existing.employmentType !== incoming.employmentType
+    || JSON.stringify(locations(existing.locations)) !== JSON.stringify(locations(incoming.locations));
 }

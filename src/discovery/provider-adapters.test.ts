@@ -10,6 +10,7 @@ import { discoverWorkdayJobs, extractWorkdayJobs, workdayConfig, workdayDiscover
 import { extractAmazonJobs, isAmazon } from "./amazon.ts";
 import { extractSalesforceJobs, isSalesforce } from "./salesforce.ts";
 import { extractGoogleCareersJobs, isGoogleCareers } from "./google-careers.ts";
+import { extractGreenhouseJobs, greenhouseBoard } from "./greenhouse.ts";
 
 const source: TargetSource = { id: "source", kind: "CAREERS", url: "https://example.com/careers", enabled: true, scanCron: "* * * * *" };
 const target = (name: string): TargetCompany => ({
@@ -17,6 +18,16 @@ const target = (name: string): TargetCompany => ({
   sources: [source], createdAt: "2026-08-20T00:00:00.000Z",
 });
 const observedAt = "2026-08-20T12:00:00.000Z";
+
+test("maps HP IQ to Greenhouse and gives Stripe a working direct application URL", () => {
+  assert.equal(greenhouseBoard(target("HP IQ")), "hpiq");
+  const jobs = extractGreenhouseJobs({ jobs: [{ id: 8128745, title: "Software Engineer, Intern (Summer or Winter)",
+    absolute_url: "https://stripe.com/jobs/search?gh_jid=8128745", content: "Build financial infrastructure.",
+    location: { name: "San Francisco, CA" } }] }, source, target("Stripe"), observedAt);
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].canonicalUrl, "https://stripe.com/jobs/search?gh_jid=8128745");
+  assert.equal(jobs[0].applicationUrl, "https://job-boards.greenhouse.io/embed/job_app?for=stripe&token=8128745");
+});
 
 test("normalizes Ashby postings and secondary locations", () => {
   const jobs = extractAshbyJobs({ jobs: [{ title: "Software Engineer Intern", location: "San Francisco, CA",
@@ -122,14 +133,15 @@ test("normalizes Salesforce's published careers dataset including college-grad r
   assert.equal(jobs[0].employmentType, "NEW_GRAD");
 });
 
-test("extracts Google undergraduate early-career cards and rejects PhD-only roles", () => {
+test("extracts Google's US Summer 2027 BS internship card and rejects PhD-only roles", () => {
   const company = target("Google");
   company.domain = "google.com";
-  const html = `<div class="ObfsIf-eEDwDf"><h3 class="QJPWVe">Software Engineering Intern, BS, Summer 2027</h3><span class="r0wTof">Mountain View, CA, USA</span><a href="jobs/results/123-software-engineering-intern-bs-summer-2027">Learn more</a></div>
+  const html = `<div class="ObfsIf-eEDwDf"><h3 class="QJPWVe">Software Engineering Intern, BS, Summer 2027</h3><span class="r0wTof">Mountain View, CA, USA</span><span class="r0wTof">Atlanta, GA, USA</span><a href="jobs/results/85564713261245126-software-engineering-intern-bs-summer-2027?target_level=INTERN_AND_APPRENTICE">Learn more</a></div>
     <div class="ObfsIf-eEDwDf"><h3 class="QJPWVe">Research Intern, PhD, Summer 2027</h3><span class="r0wTof">New York, NY, USA</span><a href="jobs/results/456-research-intern-phd-summer-2027">Learn more</a></div>`;
   const jobs = extractGoogleCareersJobs(html, source, company, observedAt);
   assert.equal(isGoogleCareers(company), true);
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].title, "Software Engineering Intern, BS, Summer 2027");
-  assert.deepEqual(jobs[0].locations, ["Mountain View, CA, USA"]);
+  assert.deepEqual(jobs[0].locations, ["Mountain View, CA, USA", "Atlanta, GA, USA"]);
+  assert.equal(jobs[0].canonicalUrl, "https://www.google.com/about/careers/applications/jobs/results/85564713261245126-software-engineering-intern-bs-summer-2027");
 });

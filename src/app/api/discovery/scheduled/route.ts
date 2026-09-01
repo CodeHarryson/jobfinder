@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     return dueSources.length ? [{ ...target, sources: dueSources }] : [];
   });
   if (!dueTargets.length) return NextResponse.json({ scannedAt: now.toISOString(), skipped: true, reason: "No sources are due." });
-  const batch = selectScanBatch(dueTargets, now);
+  const batch = selectScanBatch(dueTargets, await repository.reserveScanCursor());
 
   try {
     const result = await runDiscoveryScan(repository, batch.targets);
