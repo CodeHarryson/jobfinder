@@ -53,13 +53,30 @@ Open `http://localhost:3000`. The current foundation includes the release-one da
 
 The discovery pipeline is operational through **Scan now**. It routes configured companies through reusable Greenhouse, Jibe/iCIMS, Ashby, Lever, Eightfold, Workday, Phenom, and Oracle HCM adapters, with a conservative HTML fallback for unknown providers. Results are filtered by role keywords and U.S. location, then deduplicated by canonical URL. A landing page that loads but exposes no job records is reported as a failure and cannot deactivate previously discovered jobs. Targets, sources, opportunities, provider-level scan health, and scan history are persisted in a local SQLite database at `data/jobfinder.sqlite`; existing browser-stored targets are migrated automatically on first load, with browser storage retained as an offline fallback. The latest provider counts and failures are available at `GET /api/discovery/health`.
 
-Neon Serverless Postgres is the durable application database in development and on Vercel. `DATABASE_URL` is provisioned through the Vercel Marketplace and consumed only by server routes. SQLite remains an isolated test and one-time local migration adapter. The protected `GET /api/discovery/scheduled` endpoint evaluates each source's five-field UTC cron expression and scans only sources due in that minute. Set `CRON_SECRET` in production and send it as a bearer token. New and materially updated postings are recorded as notification candidates and exposed by `GET /api/notifications?unread=true`.
+Neon Serverless Postgres is the durable application database in development and on Render. `DATABASE_URL` is consumed only by server routes. SQLite remains an isolated test and one-time local migration adapter. The protected `GET /api/discovery/scheduled` endpoint evaluates each source's five-field UTC cron expression and scans only sources due in that minute. Set `CRON_SECRET` in production and send it as a bearer token. New and materially updated postings are recorded as notification candidates and exposed by `GET /api/notifications?unread=true`.
 
 Outbound notification delivery, rendered-browser fallback, and event extraction remain upcoming stages.
 
 The in-app notification inbox is available from the dashboard. It shows unread counts and enriched job/company details, and supports marking one or all notifications read and dismissing individual items. Outbound email requires provisioning a messaging integration; this repository does not install an unconfigured provider SDK or store placeholder credentials.
 
-Discord is the primary out-of-app delivery channel. Set `DISCORD_WEBHOOK_URL` as a server-only Vercel environment variable. New and materially updated roles are queued in a durable outbox, sent as rich Discord embeds, deduplicated by notification and channel, and retried with exponential backoff after transient failures. The Vercel Hobby-compatible cron runs daily at 13:00 UTC; Pro deployments can change `vercel.json` to `* * * * *` for one-minute discovery.
+Discord is the primary out-of-app delivery channel. Set `DISCORD_WEBHOOK_URL` as a server-only Render environment variable. New and materially updated roles are queued in a durable outbox, sent as rich Discord embeds, deduplicated by notification and channel, and retried with exponential backoff after transient failures.
+
+## Deploy on Render
+
+Connect this GitHub repository to a Render Blueprint using [`render.yaml`](render.yaml). It creates one free Node web service, builds with `npm ci && npm run build`, and starts the Next.js server. The existing Neon database remains the source of truth; no data migration is needed. Enter `DATABASE_URL`, `CRON_SECRET`, `DISCORD_WEBHOOK_URL`, `INNGEST_EVENT_KEY`, and `INNGEST_SIGNING_KEY` when Render prompts for secrets. Use the existing values from the previous host so the app retains its database and notification integrations. If Discord or Inngest is not in use, its corresponding variables can be omitted from the service after creation.
+
+Once the service is live, verify its `/` and `/api/discovery/health` endpoints. Configure an external cron job with the service's Render URL:
+
+```text
+Schedule: */20 * * * * (UTC)
+Method: GET
+URL: https://YOUR-SERVICE.onrender.com/api/discovery/scheduled
+Header: Authorization: Bearer YOUR_CRON_SECRET
+```
+
+Use the same `CRON_SECRET` value in the cron job and Render. Each source also has its own UTC scan schedule, checked at request time. The default `* * * * *` is due on every 20-minute invocation; a source with a narrower schedule runs only when it coincides with an invocation. Avoid schedules such as `15 * * * *` with this caller. A free service may sleep after 15 minutes idle, so allow enough request time for its cold start and scan.
+
+If Gmail tracking is in use, also configure its Google and Gmail variables from [`.env.example`](.env.example), update `GOOGLE_OAUTH_REDIRECT_URI` and the Google OAuth client's authorized redirect URI to the new `https://YOUR-SERVICE.onrender.com/api/google/callback`, and sync `https://YOUR-SERVICE.onrender.com/api/inngest` in Inngest. The Inngest Gmail sync retains its separate five-minute schedule.
 
 ## Gmail application tracking
 
@@ -68,7 +85,7 @@ The Gmail-first application tracker runs independently from job discovery, so ex
 Create a Google Cloud OAuth web client, enable the Gmail API and Google Calendar API, and configure the variables in `.env.example`. Add these authorized redirect URIs:
 
 - `http://localhost:3000/api/google/callback`
-- `https://jobfinder-fawn-phi.vercel.app/api/google/callback`
+- `https://YOUR-SERVICE.onrender.com/api/google/callback`
 
 Then open `/api/google/connect` to authorize the single account named by `GMAIL_ALLOWED_EMAIL`. The requested Gmail scope is read-only. Calendar access is limited to events and free/busy data. The current safety policy creates preparation-block proposals for detected OA/interview dates; it does not write calendar events until a later approval endpoint is added.
 
