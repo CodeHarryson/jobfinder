@@ -65,16 +65,9 @@ Discord is the primary out-of-app delivery channel. Set `DISCORD_WEBHOOK_URL` as
 
 Connect this GitHub repository to a Render Blueprint using [`render.yaml`](render.yaml). It creates one free Node web service, builds with `npm ci && npm run build`, and starts the Next.js server. The existing Neon database remains the source of truth; no data migration is needed. Enter `DATABASE_URL`, `CRON_SECRET`, `DISCORD_WEBHOOK_URL`, `INNGEST_EVENT_KEY`, and `INNGEST_SIGNING_KEY` when Render prompts for secrets. Use the existing values from the previous host so the app retains its database and notification integrations. If Discord or Inngest is not in use, its corresponding variables can be omitted from the service after creation.
 
-Once the service is live, verify its `/` and `/api/discovery/health` endpoints. Configure an external cron job with the service's Render URL:
+Once the service is live, verify its `/` and `/api/discovery/health` endpoints. The [GitHub Actions discovery workflow](.github/workflows/discovery-scan.yml) calls `https://jobfinder-50iy.onrender.com/api/discovery/scheduled` every 20 minutes (minutes 7, 27, and 47 UTC). Add a repository Actions secret named `CRON_SECRET` with the same value configured on Render. The workflow can also be run manually from the Actions tab. Disable any previous external cron job to avoid duplicate scans.
 
-```text
-Schedule: */20 * * * * (UTC)
-Method: GET
-URL: https://YOUR-SERVICE.onrender.com/api/discovery/scheduled
-Header: Authorization: Bearer YOUR_CRON_SECRET
-```
-
-Use the same `CRON_SECRET` value in the cron job and Render. Each source also has its own UTC scan schedule, checked at request time. The default `* * * * *` is due on every 20-minute invocation; a source with a narrower schedule runs only when it coincides with an invocation. Avoid schedules such as `15 * * * *` with this caller. A free service may sleep after 15 minutes idle, so allow enough request time for its cold start and scan.
+Each source also has its own UTC scan schedule, checked at request time. The default `* * * * *` is due on every 20-minute invocation; a source with a narrower schedule runs only when it coincides with an invocation. Avoid schedules such as `15 * * * *` with this caller. GitHub may delay or drop scheduled runs during busy periods and automatically disables schedules in public repositories after 60 days without activity; monitor workflow run history.
 
 If Gmail tracking is in use, also configure its Google and Gmail variables from [`.env.example`](.env.example), update `GOOGLE_OAUTH_REDIRECT_URI` and the Google OAuth client's authorized redirect URI to the new `https://YOUR-SERVICE.onrender.com/api/google/callback`, and sync `https://YOUR-SERVICE.onrender.com/api/inngest` in Inngest. The Inngest Gmail sync retains its separate five-minute schedule.
 

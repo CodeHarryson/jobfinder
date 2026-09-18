@@ -1,0 +1,36 @@
+name: Discovery scan
+
+on:
+  schedule:
+    # Every 20 minutes, offset from the top of the hour to reduce delays.
+    - cron: "7,27,47 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: jobfinder-discovery-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Call Render discovery endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "Repository secret CRON_SECRET is missing."
+            exit 1
+          fi
+
+          curl --silent --show-error --fail-with-body \
+            --connect-timeout 30 --max-time 480 \
+            --header "Authorization: Bearer $CRON_SECRET" \
+            --output response.json \
+            https://jobfinder-50iy.onrender.com/api/discovery/scheduled
+
+          jq --exit-status '.ok == true or .skipped == true' response.json > /dev/null
+          jq --compact-output '{scannedAt, skipped, jobsFound, sourcesScanned, sourcesFailed, batchIndex, batchCount}' response.json
