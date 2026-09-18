@@ -6,7 +6,8 @@ on:
     - cron: "7,27,47 * * * *"
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
 
 concurrency:
   group: jobfinder-discovery-scan
@@ -34,4 +35,22 @@ jobs:
 
           jq --exit-status '.ok == true or .skipped == true' response.json > /dev/null
           jq --compact-output '{scannedAt, skipped, jobsFound, changesFound, sourcesScanned, sourcesFailed, notifications, batchIndex, batchCount}' response.json
-          jq --exit-status '.skipped == true or (.notifications.enabled == true and .notifications.failed == 0)' response.json > /dev/null
+          jq --exit-status '.skipped == true or .notifications.enabled == true' response.json > /dev/null
+
+      - name: Check out delivery code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --omit=dev
+
+      - name: Deliver queued Discord alerts
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: node --experimental-strip-types scripts/deliver-discord.ts
