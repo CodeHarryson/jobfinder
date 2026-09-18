@@ -258,9 +258,9 @@ export class JobFinderRepository {
       .run(externalId, new Date().toISOString(), id);
   }
 
-  failDiscordDelivery(id: string, attempts: number, error: string): void {
+  failDiscordDelivery(id: string, attempts: number, error: string, retryAfterMs = 0): void {
     const delays = [60_000, 5 * 60_000, 15 * 60_000, 60 * 60_000];
-    const nextAttemptAt = new Date(Date.now() + delays[Math.min(attempts - 1, delays.length - 1)]).toISOString();
+    const nextAttemptAt = new Date(Date.now() + Math.max(retryAfterMs, delays[Math.min(attempts - 1, delays.length - 1)])).toISOString();
     this.db.prepare("UPDATE notification_deliveries SET status='FAILED',next_attempt_at=?,last_error=?,updated_at=? WHERE id=?")
       .run(nextAttemptAt, error.slice(0, 500), new Date().toISOString(), id);
   }

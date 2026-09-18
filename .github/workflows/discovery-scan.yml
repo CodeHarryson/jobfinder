@@ -33,4 +33,5 @@ jobs:
             https://jobfinder-50iy.onrender.com/api/discovery/scheduled
 
           jq --exit-status '.ok == true or .skipped == true' response.json > /dev/null
-          jq --compact-output '{scannedAt, skipped, jobsFound, sourcesScanned, sourcesFailed, batchIndex, batchCount}' response.json
+          jq --compact-output '{scannedAt, skipped, jobsFound, changesFound, sourcesScanned, sourcesFailed, notifications, batchIndex, batchCount}' response.json
+          jq --exit-status '.skipped == true or (.notifications.enabled == true and .notifications.failed == 0)' response.json > /dev/null

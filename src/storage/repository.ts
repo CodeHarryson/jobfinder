@@ -67,7 +67,7 @@ export interface Repository {
   enqueueDiscordDeliveries(changes: DiscoveryChange[]): Promise<number>;
   claimDiscordDeliveries(limit?: number, now?: Date): Promise<NotificationDelivery[]>;
   completeDiscordDelivery(id: string, externalId: string): Promise<void>;
-  failDiscordDelivery(id: string, attempts: number, error: string): Promise<void>;
+  failDiscordDelivery(id: string, attempts: number, error: string, retryAfterMs?: number): Promise<void>;
   recordScan(input: { startedAt: string; finishedAt: string; targetCount: number; jobCount: number; failures: unknown[]; sourceResults?: unknown[] }): Promise<void>;
   getDiscoveryHealth(): Promise<DiscoveryHealth | null>;
 }

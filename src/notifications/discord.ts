@@ -26,19 +26,32 @@ export async function dispatchDiscordNotifications(repository: Repository, chang
   const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
   if (!webhookUrl) return { enabled: false, queued: 0, sent: 0, failed: 0 };
   const queued = await repository.enqueueDiscordDeliveries(changes);
-  const deliveries = await repository.claimDiscordDeliveries();
   let sent = 0;
   let failed = 0;
-  for (const delivery of deliveries) {
+  for (let index = 0; index < 10; index += 1) {
+    // Claim one at a time so a rate limit does not strand a claimed batch in SENDING.
+    const [delivery] = await repository.claimDiscordDeliveries(1);
+    if (!delivery) break;
     try {
       const separator = webhookUrl.includes("?") ? "&" : "?";
       const response = await fetcher(`${webhookUrl}${separator}wait=true`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(discordPayload(delivery.notification)),
       });
+      if (response.status === 429) {
+        const retryAfterHeader = response.headers.get("retry-after");
+        const retryAfterBody = retryAfterHeader ? null : await response.json().catch(() => null) as { retry_after?: number } | null;
+        const retryAfter = Number(retryAfterHeader ?? retryAfterBody?.retry_after);
+        const delay = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.ceil(retryAfter * 1000) : 60_000;
+        await repository.failDiscordDelivery(delivery.id, delivery.attempts, "Discord returned 429.", delay);
+        failed += 1;
+        break;
+      }
       if (!response.ok) throw new Error(`Discord returned ${response.status}.`);
       const result = await response.json() as { id?: string };
       await repository.completeDiscordDelivery(delivery.id, result.id ?? "accepted");
       sent += 1;
+      // Discord's per-webhook limit is shared with other senders to this channel.
+      await new Promise((resolve) => setTimeout(resolve, 750));
     } catch (error) {
       await repository.failDiscordDelivery(delivery.id, delivery.attempts, error instanceof Error ? error.message : "Discord delivery failed.");
       failed += 1;
