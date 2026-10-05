@@ -17,7 +17,15 @@ export type CompanyDiscoveryHealth = {
   errors: string[];
 };
 
-type ScanHistoryEntry = { startedAt: string; failures: unknown[]; sourceResults: unknown[] };
+export type ScanHistoryEntry = { startedAt: string; failures: unknown[]; sourceResults: unknown[] };
+export type SourceScanOutcome = {
+  sourceId: string;
+  provider: string;
+  succeeded: boolean;
+  error: string | null;
+  attemptedAt: string;
+  nextRunAt: string;
+};
 type ScanRecord = { companyId?: unknown; provider?: unknown; discoveredCount?: unknown; unitedStatesCount?: unknown; message?: unknown };
 
 export function companyHealthFromHistory(history: ScanHistoryEntry[]): CompanyDiscoveryHealth[] {
@@ -52,6 +60,9 @@ export function companyHealthFromHistory(history: ScanHistoryEntry[]): CompanyDi
 
 export interface Repository {
   reserveScanCursor(): Promise<number>;
+  claimDueSources(now: Date, limit: number, leaseMs: number, priorityCompanyNames: string[]): Promise<TargetCompany[]>;
+  getSourceFailureCounts(sourceIds: string[]): Promise<Map<string, number>>;
+  completeSourceScans(outcomes: SourceScanOutcome[]): Promise<void>;
   listTargets(): Promise<TargetCompany[]>;
   saveTarget(target: TargetCompany): Promise<TargetCompany>;
   saveTargets(targets: TargetCompany[]): Promise<TargetCompany[]>;
@@ -70,6 +81,9 @@ export interface Repository {
   failDiscordDelivery(id: string, attempts: number, error: string, retryAfterMs?: number): Promise<void>;
   recordScan(input: { startedAt: string; finishedAt: string; targetCount: number; jobCount: number; failures: unknown[]; sourceResults?: unknown[] }): Promise<void>;
   getDiscoveryHealth(): Promise<DiscoveryHealth | null>;
+  listScanHistory(limit?: number): Promise<ScanHistoryEntry[]>;
+  claimSourceAlert(sourceId: string, cooldownMs: number, now?: Date): Promise<boolean>;
+  clearSourceAlert(sourceId: string): Promise<void>;
 }
 
 type MaterialJobFields = Pick<JobPosting, "title" | "applicationUrl" | "locations" | "employmentType">;

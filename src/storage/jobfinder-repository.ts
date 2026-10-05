@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { JobPosting, RecruitingEvent, SourceKind, TargetCompany, TargetSource } from "../domain/opportunity.ts";
-import { companyHealthFromHistory, isMaterialJobUpdate, type DiscoveryHealth } from "./repository.ts";
+import { companyHealthFromHistory, isMaterialJobUpdate, type DiscoveryHealth, type ScanHistoryEntry, type SourceScanOutcome } from "./repository.ts";
 
 type CompanyRow = { id: string; name: string; domain: string; priority: string; role_keywords: string; event_keywords: string; created_at: string };
 type SourceRow = { id: string; company_id: string; kind: string; url: string; enabled: number; scan_cron: string };
@@ -70,7 +70,13 @@ export class JobFinderRepository {
         UNIQUE(change_id, channel)
       );
       CREATE TABLE IF NOT EXISTS discovery_state (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS source_discovery_schedule (
+        source_id TEXT PRIMARY KEY REFERENCES target_sources(id) ON DELETE CASCADE,
+        next_run_at TEXT NOT NULL, lease_expires_at TEXT, consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        last_provider TEXT, last_attempted_at TEXT, last_succeeded_at TEXT, last_error TEXT
+      );
       CREATE INDEX IF NOT EXISTS job_postings_last_seen_idx ON job_postings(last_seen_at DESC);
+      CREATE INDEX IF NOT EXISTS source_discovery_schedule_due_idx ON source_discovery_schedule(next_run_at,lease_expires_at);
     `);
     const jobColumns = new Set((this.db.prepare("PRAGMA table_info(job_postings)").all() as Array<{ name: string }>).map(({ name }) => name));
     if (!jobColumns.has("active")) this.db.exec("ALTER TABLE job_postings ADD COLUMN active INTEGER NOT NULL DEFAULT 1");
@@ -87,6 +93,55 @@ export class JobFinderRepository {
       this.db.prepare("INSERT INTO discovery_state(key,value) VALUES('scan_cursor',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(cursor + 1);
       this.db.exec("COMMIT");
       return cursor;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  claimDueSources(now: Date, limit: number, leaseMs: number, priorityCompanyNames: string[]): TargetCompany[] {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare(`INSERT OR IGNORE INTO source_discovery_schedule(source_id,next_run_at)
+        SELECT id,'1970-01-01T00:00:00.000Z' FROM target_sources WHERE enabled=1 AND kind<>'EVENTS'`).run();
+      const priority = new Set(priorityCompanyNames.map((name) => name.toLowerCase()));
+      const rows = this.db.prepare(`SELECT schedule.source_id,company.name FROM source_discovery_schedule schedule
+        JOIN target_sources source ON source.id=schedule.source_id
+        JOIN target_companies company ON company.id=source.company_id
+        WHERE source.enabled=1 AND source.kind<>'EVENTS' AND schedule.next_run_at<=?
+          AND (schedule.lease_expires_at IS NULL OR schedule.lease_expires_at<=?)
+        ORDER BY schedule.next_run_at,company.name COLLATE NOCASE,source.id`).all(now.toISOString(), now.toISOString()) as Array<{ source_id: string; name: string }>;
+      const selected = rows.sort((a, b) => Number(priority.has(b.name.toLowerCase())) - Number(priority.has(a.name.toLowerCase()))).slice(0, limit);
+      const leaseExpiresAt = new Date(now.getTime() + leaseMs).toISOString();
+      const lease = this.db.prepare("UPDATE source_discovery_schedule SET lease_expires_at=? WHERE source_id=?");
+      for (const row of selected) lease.run(leaseExpiresAt, row.source_id);
+      this.db.exec("COMMIT");
+      const sourceIds = new Set(selected.map((row) => row.source_id));
+      return this.listTargets().flatMap((target) => {
+        const sources = target.sources.filter((source) => sourceIds.has(source.id));
+        return sources.length ? [{ ...target, sources }] : [];
+      });
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getSourceFailureCounts(sourceIds: string[]): Map<string, number> {
+    if (!sourceIds.length) return new Map();
+    const statement = this.db.prepare("SELECT consecutive_failures FROM source_discovery_schedule WHERE source_id=?");
+    return new Map(sourceIds.map((sourceId) => [sourceId, Number((statement.get(sourceId) as { consecutive_failures?: number } | undefined)?.consecutive_failures ?? 0)]));
+  }
+
+  completeSourceScans(outcomes: SourceScanOutcome[]): void {
+    const statement = this.db.prepare(`UPDATE source_discovery_schedule SET next_run_at=?,lease_expires_at=NULL,
+      consecutive_failures=CASE WHEN ? THEN 0 ELSE consecutive_failures+1 END,last_provider=?,last_attempted_at=?,
+      last_succeeded_at=CASE WHEN ? THEN ? ELSE last_succeeded_at END,last_error=? WHERE source_id=?`);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      for (const outcome of outcomes) statement.run(outcome.nextRunAt, outcome.succeeded ? 1 : 0, outcome.provider,
+        outcome.attemptedAt, outcome.succeeded ? 1 : 0, outcome.attemptedAt, outcome.error?.slice(0, 500) ?? null, outcome.sourceId);
+      this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -279,6 +334,29 @@ export class JobFinderRepository {
         startedAt: String(scan.started_at), failures: JSON.parse(String(scan.failures)) as unknown[],
         sourceResults: JSON.parse(String(scan.source_results)) as unknown[],
       }))) } : null;
+  }
+
+  listScanHistory(limit = 100): ScanHistoryEntry[] {
+    const rows = this.db.prepare("SELECT started_at,failures,source_results FROM scan_runs ORDER BY started_at DESC LIMIT ?").all(limit) as Record<string, unknown>[];
+    return rows.map((row) => ({
+      startedAt: String(row.started_at),
+      failures: JSON.parse(String(row.failures)) as unknown[],
+      sourceResults: JSON.parse(String(row.source_results)) as unknown[],
+    }));
+  }
+
+  // Claims the right to alert on one source, atomically, so a source that keeps
+  // failing produces one alert per cooldown window instead of one per scan.
+  claimSourceAlert(sourceId: string, cooldownMs: number, now = new Date()): boolean {
+    const timestamp = now.getTime();
+    const rows = this.db.prepare(`INSERT INTO discovery_state(key,value) VALUES(?,?)
+      ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE discovery_state.value <= ? RETURNING key`)
+      .all(`source_alert:${sourceId}`, timestamp, timestamp - cooldownMs);
+    return rows.length > 0;
+  }
+
+  clearSourceAlert(sourceId: string): void {
+    this.db.prepare("DELETE FROM discovery_state WHERE key=?").run(`source_alert:${sourceId}`);
   }
 
   close() { this.db.close(); }

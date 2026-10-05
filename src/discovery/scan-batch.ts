@@ -3,7 +3,7 @@ import type { TargetCompany } from "../domain/opportunity.ts";
 export const PRIORITY_COMPANY_NAMES = [
   "Google", "Stripe", "OpenAI", "Netflix", "Bloomberg", "Pinterest", "HubSpot", "NVIDIA", "Microsoft", "Amazon",
   "Meta", "Apple", "Datadog", "Cloudflare", "Snowflake", "Confluent", "MongoDB", "Cockroach Labs", "Uber", "Airbnb",
-  "Coinbase", "Block", "Ramp", "Robinhood", "Affirm",
+  "Coinbase", "Block", "Ramp", "Robinhood", "Rippling",
 ] as const;
 
 const priorityNames = new Set(PRIORITY_COMPANY_NAMES.map((name) => name.toLowerCase()));

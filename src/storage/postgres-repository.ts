@@ -1,6 +1,6 @@
 import { Pool, type PoolClient } from "@neondatabase/serverless";
 import type { JobPosting, RecruitingEvent, TargetCompany, TargetSource } from "../domain/opportunity.ts";
-import { companyHealthFromHistory, isMaterialJobUpdate, type DiscoveryHealth, type Repository } from "./repository.ts";
+import { companyHealthFromHistory, isMaterialJobUpdate, type DiscoveryHealth, type Repository, type ScanHistoryEntry, type SourceScanOutcome } from "./repository.ts";
 import type { DiscoveryChange, NotificationDelivery, NotificationItem } from "./jobfinder-repository.ts";
 
 type Row = Record<string, unknown>;
@@ -22,7 +22,18 @@ export class PostgresRepository implements Repository {
         CREATE TABLE IF NOT EXISTS discovery_changes(id text PRIMARY KEY,job_id text NOT NULL REFERENCES job_postings(id) ON DELETE CASCADE,company_id text NOT NULL REFERENCES target_companies(id) ON DELETE CASCADE,kind text NOT NULL,created_at timestamptz NOT NULL,read_at timestamptz,UNIQUE(job_id,kind,created_at));
         CREATE TABLE IF NOT EXISTS notification_deliveries(id text PRIMARY KEY,change_id text NOT NULL REFERENCES discovery_changes(id) ON DELETE CASCADE,channel text NOT NULL,status text NOT NULL,attempts integer NOT NULL DEFAULT 0,next_attempt_at timestamptz NOT NULL,last_error text,external_id text,created_at timestamptz NOT NULL,updated_at timestamptz NOT NULL,UNIQUE(change_id,channel));
         CREATE TABLE IF NOT EXISTS discovery_state(key text PRIMARY KEY,value bigint NOT NULL);
+        CREATE TABLE IF NOT EXISTS source_discovery_schedule(
+          source_id text PRIMARY KEY REFERENCES target_sources(id) ON DELETE CASCADE,
+          next_run_at timestamptz NOT NULL,
+          lease_expires_at timestamptz,
+          consecutive_failures integer NOT NULL DEFAULT 0,
+          last_provider text,
+          last_attempted_at timestamptz,
+          last_succeeded_at timestamptz,
+          last_error text
+        );
         CREATE INDEX IF NOT EXISTS job_postings_last_seen_idx ON job_postings(last_seen_at DESC);
+        CREATE INDEX IF NOT EXISTS source_discovery_schedule_due_idx ON source_discovery_schedule(next_run_at,lease_expires_at);
         CREATE UNIQUE INDEX IF NOT EXISTS target_companies_name_unique_idx ON target_companies(lower(name));
         ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true;
         ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS missed_scans integer NOT NULL DEFAULT 0;
@@ -37,6 +48,70 @@ export class PostgresRepository implements Repository {
     const result = await (await this.db()).query(`INSERT INTO discovery_state(key,value) VALUES('scan_cursor',1)
       ON CONFLICT(key) DO UPDATE SET value=discovery_state.value+1 RETURNING value-1 AS cursor`);
     return Number(result.rows[0].cursor);
+  }
+
+  async claimDueSources(now: Date, limit: number, leaseMs: number, priorityCompanyNames: string[]): Promise<TargetCompany[]> {
+    const db = await this.db();
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(`INSERT INTO source_discovery_schedule(source_id,next_run_at)
+        SELECT id,'1970-01-01T00:00:00.000Z'::timestamptz FROM target_sources
+        WHERE enabled=true AND kind<>'EVENTS' ON CONFLICT(source_id) DO NOTHING`);
+      const leaseExpiresAt = new Date(now.getTime() + leaseMs).toISOString();
+      const claimed = await client.query(`WITH candidates AS (
+          SELECT schedule.source_id FROM source_discovery_schedule schedule
+          JOIN target_sources source ON source.id=schedule.source_id
+          JOIN target_companies company ON company.id=source.company_id
+          WHERE source.enabled=true AND source.kind<>'EVENTS' AND schedule.next_run_at<=$1
+            AND (schedule.lease_expires_at IS NULL OR schedule.lease_expires_at<=$1)
+          ORDER BY CASE WHEN lower(company.name)=ANY($4::text[]) THEN 0 ELSE 1 END,
+            schedule.next_run_at,lower(company.name),source.id
+          LIMIT $2 FOR UPDATE OF schedule SKIP LOCKED
+        ) UPDATE source_discovery_schedule schedule SET lease_expires_at=$3
+          FROM candidates WHERE schedule.source_id=candidates.source_id RETURNING schedule.source_id`,
+        [now.toISOString(), limit, leaseExpiresAt, priorityCompanyNames.map((name) => name.toLowerCase())]);
+      await client.query("COMMIT");
+      const sourceIds = new Set(claimed.rows.map((row: Row) => String(row.source_id)));
+      if (!sourceIds.size) return [];
+      return (await this.listTargets()).flatMap((target) => {
+        const sources = target.sources.filter((source) => sourceIds.has(source.id));
+        return sources.length ? [{ ...target, sources }] : [];
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async getSourceFailureCounts(sourceIds: string[]): Promise<Map<string, number>> {
+    if (!sourceIds.length) return new Map();
+    const result = await (await this.db()).query("SELECT source_id,consecutive_failures FROM source_discovery_schedule WHERE source_id=ANY($1::text[])", [sourceIds]);
+    return new Map(result.rows.map((row: Row) => [String(row.source_id), Number(row.consecutive_failures)]));
+  }
+
+  async completeSourceScans(outcomes: SourceScanOutcome[]): Promise<void> {
+    if (!outcomes.length) return;
+    const db = await this.db();
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      for (const outcome of outcomes) {
+        await client.query(`UPDATE source_discovery_schedule SET next_run_at=$2,lease_expires_at=NULL,
+          consecutive_failures=CASE WHEN $3 THEN 0 ELSE consecutive_failures+1 END,
+          last_provider=$4,last_attempted_at=$5,last_succeeded_at=CASE WHEN $3 THEN $5 ELSE last_succeeded_at END,
+          last_error=$6 WHERE source_id=$1`,
+        [outcome.sourceId, outcome.nextRunAt, outcome.succeeded, outcome.provider, outcome.attemptedAt, outcome.error?.slice(0, 500) ?? null]);
+      }
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async listTargets(): Promise<TargetCompany[]> {
@@ -103,5 +178,14 @@ export class PostgresRepository implements Repository {
   async completeDiscordDelivery(id:string,externalId:string){await(await this.db()).query("UPDATE notification_deliveries SET status='SENT',external_id=$1,last_error=NULL,updated_at=now() WHERE id=$2",[externalId,id]);}
   async failDiscordDelivery(id:string,attempts:number,error:string,retryAfterMs=0){const delays=[60_000,300_000,900_000,3_600_000];const next=new Date(Date.now()+Math.max(retryAfterMs,delays[Math.min(attempts-1,delays.length-1)]));await(await this.db()).query("UPDATE notification_deliveries SET status='FAILED',next_attempt_at=$1,last_error=$2,updated_at=now() WHERE id=$3",[next.toISOString(),error.slice(0,500),id]);}
   async recordScan(input:{startedAt:string;finishedAt:string;targetCount:number;jobCount:number;failures:unknown[];sourceResults?:unknown[]}){await(await this.db()).query("INSERT INTO scan_runs(id,started_at,finished_at,target_count,job_count,failure_count,failures,source_results) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb)",[crypto.randomUUID(),input.startedAt,input.finishedAt,input.targetCount,input.jobCount,input.failures.length,JSON.stringify(input.failures),JSON.stringify(input.sourceResults??[])]);}
+  async listScanHistory(limit=100):Promise<ScanHistoryEntry[]>{const result=await(await this.db()).query("SELECT started_at,failures,source_results FROM scan_runs ORDER BY started_at DESC LIMIT $1",[limit]);return result.rows.map((row:Row)=>({startedAt:new Date(String(row.started_at)).toISOString(),failures:row.failures as unknown[],sourceResults:row.source_results as unknown[]}));}
+
+  // Claims the right to alert on one source, atomically, so a source that keeps
+  // failing produces one alert per cooldown window instead of one per scan.
+  async claimSourceAlert(sourceId:string,cooldownMs:number,now=new Date()):Promise<boolean>{const timestamp=now.getTime();const result=await(await this.db()).query(`INSERT INTO discovery_state(key,value) VALUES($1,$2)
+    ON CONFLICT(key) DO UPDATE SET value=$2 WHERE discovery_state.value <= $3 RETURNING key`,[`source_alert:${sourceId}`,timestamp,timestamp-cooldownMs]);return (result.rowCount??0)>0;}
+
+  async clearSourceAlert(sourceId:string):Promise<void>{await(await this.db()).query("DELETE FROM discovery_state WHERE key=$1",[`source_alert:${sourceId}`]);}
+
   async getDiscoveryHealth():Promise<DiscoveryHealth|null>{const result=await(await this.db()).query("SELECT * FROM scan_runs ORDER BY started_at DESC LIMIT 100");const row=result.rows[0] as Row|undefined;return row?{startedAt:new Date(String(row.started_at)).toISOString(),finishedAt:new Date(String(row.finished_at)).toISOString(),targetCount:Number(row.target_count),jobCount:Number(row.job_count),failureCount:Number(row.failure_count),failures:row.failures as unknown[],sourceResults:row.source_results as unknown[],companyHealth:companyHealthFromHistory(result.rows.map((scan:Row)=>({startedAt:new Date(String(scan.started_at)).toISOString(),failures:scan.failures as unknown[],sourceResults:scan.source_results as unknown[]})))}:null;}
 }

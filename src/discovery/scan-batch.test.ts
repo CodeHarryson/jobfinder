@@ -27,3 +27,7 @@ test("daily invocations cannot become stuck on one cohort or batch",()=>{
   const batches=Array.from({length:10},(_,cursor)=>selectScanBatch(watchlist,cursor));
   assert.equal(new Set(batches.flatMap(({targets:batch})=>batch.map(({id})=>id))).size,112);
 });
+
+test("keeps Rippling in the frequently scanned priority cohort",()=>{
+  assert.equal(PRIORITY_COMPANY_NAMES.includes("Rippling"),true);
+});

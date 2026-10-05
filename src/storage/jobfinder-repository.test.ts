@@ -64,6 +64,26 @@ test("reserves a durable scan cursor for every invocation", () => {
   repository.close();
 });
 
+test("claims overdue sources with priority, leases them, and records completion", () => {
+  const repository = new JobFinderRepository();
+  const stripe = createTargetCompany({ name: "Stripe", domain: "stripe.com", careerUrl: "https://stripe.com/jobs/search" });
+  const other = createTargetCompany({ name: "Other", domain: "other.example", careerUrl: "https://other.example/jobs" });
+  assert.equal(stripe.ok, true); assert.equal(other.ok, true);
+  if (!stripe.ok || !other.ok) return;
+  repository.saveTargets([other.value, stripe.value]);
+  const now = new Date("2026-10-04T12:00:00.000Z");
+  const first = repository.claimDueSources(now, 1, 4 * 60_000, ["Stripe"]);
+  assert.deepEqual(first.map(({ name }) => name), ["Stripe"]);
+  assert.deepEqual(repository.claimDueSources(now, 1, 4 * 60_000, ["Stripe"]).map(({ name }) => name), ["Other"]);
+  const sourceId = stripe.value.sources[0].id;
+  repository.completeSourceScans([{ sourceId, provider: "GREENHOUSE", succeeded: false, error: "HTTP 429",
+    attemptedAt: now.toISOString(), nextRunAt: "2026-10-04T12:30:00.000Z" }]);
+  assert.equal(repository.getSourceFailureCounts([sourceId]).get(sourceId), 1);
+  assert.equal(repository.claimDueSources(new Date("2026-10-04T12:29:00.000Z"), 2, 4 * 60_000, ["Stripe"]).some(({ name }) => name === "Stripe"), false);
+  assert.equal(repository.claimDueSources(new Date("2026-10-04T12:30:00.000Z"), 2, 4 * 60_000, ["Stripe"]).some(({ name }) => name === "Stripe"), true);
+  repository.close();
+});
+
 test("persists provider-level discovery health for the latest scan", () => {
   const repository = new JobFinderRepository();
   repository.recordScan({ startedAt: "2026-08-20T01:00:00.000Z", finishedAt: "2026-08-20T01:00:02.000Z",
@@ -92,4 +112,27 @@ test("does not deliver queued alerts for jobs omitted by the latest successful s
   repository.saveJobs([], [created.value.sources[0].id]);
   assert.equal(repository.claimDiscordDeliveries().length, 0);
   repository.close();
+});
+
+test("returns scan history newest first for failure-streak analysis", () => {
+  const repository = new JobFinderRepository();
+  repository.recordScan({ startedAt: "2026-09-30T00:00:00.000Z", finishedAt: "2026-09-30T00:00:05.000Z", targetCount: 1, jobCount: 0,
+    failures: [{ companyId: "meta", sourceId: "s1", provider: "META_CAREERS", message: "Source returned HTTP 502." }], sourceResults: [] });
+  repository.recordScan({ startedAt: "2026-09-30T01:00:00.000Z", finishedAt: "2026-09-30T01:00:05.000Z", targetCount: 1, jobCount: 6,
+    failures: [], sourceResults: [{ companyId: "meta", sourceId: "s1", provider: "META_CAREERS", discoveredCount: 6 }] });
+  const history = repository.listScanHistory();
+  assert.deepEqual(history.map((scan) => scan.startedAt), ["2026-09-30T01:00:00.000Z", "2026-09-30T00:00:00.000Z"]);
+  assert.equal((history[0].sourceResults[0] as { discoveredCount: number }).discoveredCount, 6);
+  assert.equal((history[1].failures[0] as { message: string }).message, "Source returned HTTP 502.");
+});
+
+test("grants one source alert claim per cooldown window and re-grants after a clear", () => {
+  const repository = new JobFinderRepository();
+  const cooldown = 12 * 60 * 60 * 1000;
+  assert.equal(repository.claimSourceAlert("s1", cooldown, new Date("2026-09-30T00:00:00.000Z")), true);
+  assert.equal(repository.claimSourceAlert("s1", cooldown, new Date("2026-09-30T06:00:00.000Z")), false);
+  assert.equal(repository.claimSourceAlert("s2", cooldown, new Date("2026-09-30T06:00:00.000Z")), true);
+  assert.equal(repository.claimSourceAlert("s1", cooldown, new Date("2026-09-30T13:00:00.000Z")), true);
+  repository.clearSourceAlert("s1");
+  assert.equal(repository.claimSourceAlert("s1", cooldown, new Date("2026-09-30T13:30:00.000Z")), true);
 });

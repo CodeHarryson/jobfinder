@@ -9,8 +9,10 @@ import { isUnitedStatesJob } from "./scan-targets.ts";
 import { discoverWorkdayJobs, extractWorkdayJobs, workdayConfig, workdayDiscoveryQueries } from "./workday.ts";
 import { extractAmazonJobs, isAmazon } from "./amazon.ts";
 import { extractSalesforceJobs, isSalesforce } from "./salesforce.ts";
-import { extractGoogleCareersJobs, isGoogleCareers } from "./google-careers.ts";
+import { discoverGoogleCareersJobs, extractGoogleCareersJobs, isGoogleCareers } from "./google-careers.ts";
 import { extractGreenhouseJobs, greenhouseBoard } from "./greenhouse.ts";
+import { extractRipplingJobs, isRippling } from "./rippling.ts";
+import { discoverMetaJobs, extractMetaJobs, isMeta, parseMetaDocId, parseMetaPageTokens } from "./meta.ts";
 
 const source: TargetSource = { id: "source", kind: "CAREERS", url: "https://example.com/careers", enabled: true, scanCron: "* * * * *" };
 const target = (name: string): TargetCompany => ({
@@ -144,4 +146,93 @@ test("extracts Google's US Summer 2027 BS internship card and rejects PhD-only r
   assert.equal(jobs[0].title, "Software Engineering Intern, BS, Summer 2027");
   assert.deepEqual(jobs[0].locations, ["Mountain View, CA, USA", "Atlanta, GA, USA"]);
   assert.equal(jobs[0].canonicalUrl, "https://www.google.com/about/careers/applications/jobs/results/85564713261245126-software-engineering-intern-bs-summer-2027");
+});
+
+test("queries Google university-graduate roles in parallel and tolerates one failed query", async () => {
+  const company = target("Google");
+  company.domain = "google.com";
+  company.roleKeywords = ["intern", "new grad", "graduate"];
+  const requested: string[] = [];
+  const jobs = await discoverGoogleCareersJobs(source, company, observedAt, async (url) => {
+    const query = new URL(url).searchParams.get("q") ?? "";
+    requested.push(query);
+    if (query === "new grad") throw new Error("timed out");
+    if (query !== "university graduate") return "<html></html>";
+    return `<div><h3 class="QJPWVe">Associate Product Manager, University Graduate, 2027 Start</h3><span class="r0wTof">Mountain View, CA, USA</span><a href="jobs/results/123-associate-product-manager-university-graduate-2027-start">Learn more</a></div>`;
+  });
+  assert.deepEqual(new Set(requested), new Set(["intern", "new grad", "university graduate"]));
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].employmentType, "NEW_GRAD");
+});
+
+test("normalizes Rippling's public careers index and merges location records", () => {
+  const company = target("Rippling");
+  company.domain = "rippling.com";
+  const url = "https://ats.rippling.com/rippling/jobs/a07e4e46-3721-4934-b57b-0d58412e22ba";
+  const jobs = extractRipplingJobs([{ hits: [
+    { name: "Software Engineer Intern - Backend Focused - Summer 2027", url, departmentName: "Engineering", locationNames: ["Seattle, WA"] },
+    { name: "Software Engineer Intern - Backend Focused - Summer 2027", url, departmentName: "Engineering", locations: [{ name: "San Francisco, CA", countryCode: "US" }] },
+  ] }], source, company, observedAt);
+  assert.equal(isRippling(company), true);
+  assert.equal(jobs.length, 1);
+  assert.deepEqual(jobs[0].locations, ["Seattle, WA", "San Francisco, CA"]);
+  assert.equal(jobs[0].employmentType, "INTERNSHIP");
+});
+
+test("recognizes Meta by name and domain", () => {
+  assert.equal(isMeta(target("Meta")), true);
+  assert.equal(isMeta({ ...target("Anything"), domain: "metacareers.com" }), true);
+  assert.equal(isMeta(target("Netflix")), false);
+});
+
+test("normalizes Meta job search results and keeps only early-career titles", () => {
+  const jobs = extractMetaJobs([{ data: { job_search_with_featured_jobs: {
+    featured_jobs: [{ id: "1613359540444032", title: "Product Design Engineering Intern", locations: ["Redmond, WA"],
+      teams: ["Facebook Reality Labs"], sub_teams: ["Hardware"] }],
+    all_jobs: [
+      { id: "1095054769939445", title: "DFX Engineering Intern", locations: ["Sunnyvale, CA", "Seattle, WA"],
+        teams: ["AR/VR", "Internship - Engineering, Tech & Design"], sub_teams: ["Hardware"] },
+      { id: "999", title: "Principal, Strategic Data Center Partnerships", locations: ["Menlo Park, CA"], teams: ["Infra"] },
+      { id: "not-numeric", title: "Software Engineer Intern", locations: ["Menlo Park, CA"] },
+    ],
+  } } }], source, target("Meta"), observedAt);
+  assert.deepEqual(jobs.map((job) => job.title), ["Product Design Engineering Intern", "DFX Engineering Intern"]);
+  assert.equal(jobs[1].canonicalUrl, "https://www.metacareers.com/jobs/1095054769939445/");
+  assert.equal(jobs[1].applicationUrl, "https://www.metacareers.com/jobs/1095054769939445/");
+  assert.deepEqual(jobs[1].locations, ["Sunnyvale, CA", "Seattle, WA"]);
+  assert.equal(jobs[1].employmentType, "INTERNSHIP");
+  assert.equal(jobs.every((job) => isUnitedStatesJob(job)), true);
+});
+
+test("surfaces a Meta GraphQL error instead of reporting an empty scan", () => {
+  assert.throws(() => extractMetaJobs([{ errors: [{ message: "Persisted query not found" }] }], source, target("Meta"), observedAt),
+    /Persisted query not found/);
+});
+
+test("reads the LSD token and bundle URLs from the Meta careers page", () => {
+  const html = `<script>require("ServerJS").handle({"define":[["LSD",[],{"token":"AdSzR9FcUvh"},1]]});</script>`
+    + `<script src="https://static.xx.fbcdn.net/rsrc.php/v4/yd/r/FfSDR6BW-8Z.js"></script>`;
+  assert.deepEqual(parseMetaPageTokens(html), { lsd: "AdSzR9FcUvh", scriptUrls: ["https://static.xx.fbcdn.net/rsrc.php/v4/yd/r/FfSDR6BW-8Z.js"] });
+  assert.throws(() => parseMetaPageTokens("<html></html>"), /LSD token/);
+});
+
+test("recovers a rotated Meta persisted-query id from the page bundles", async () => {
+  const page = `<script>{"define":[["LSD",[],{"token":"tok"},1]]}</script>`
+    + `<script src="https://static.xx.fbcdn.net/rsrc.php/a.js"></script>`;
+  const bundle = `__d("CareersJobSearchResultsDataQuery_candidate_portalRelayOperation",[],(function(t,n,r,o,a,i){a.exports="12345678901234567"}),null);`;
+  assert.equal(parseMetaDocId(bundle), "12345678901234567");
+  const docIds: string[] = [];
+  const jobs = await discoverMetaJobs(source, target("Meta"), observedAt, async (url, init) => {
+    if (url === "https://www.metacareers.com/jobs/") return page;
+    if (url.endsWith(".js")) return bundle;
+    const docId = new URLSearchParams(String(init?.body)).get("doc_id") ?? "";
+    docIds.push(docId);
+    if (docId !== "12345678901234567") return JSON.stringify({ errors: [{ message: "Persisted query not found" }] });
+    return JSON.stringify({ data: { job_search_with_featured_jobs: { all_jobs: [
+      { id: "42", title: "Software Engineer Intern", locations: ["Menlo Park, CA"], teams: ["Internship - Engineering"] },
+    ], featured_jobs: [] } } });
+  });
+  assert.notEqual(docIds[0], "12345678901234567");
+  assert.equal(docIds.at(-1), "12345678901234567");
+  assert.deepEqual(jobs.map((job) => job.title), ["Software Engineer Intern"]);
 });

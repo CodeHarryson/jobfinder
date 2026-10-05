@@ -13,6 +13,8 @@ import { discoverOracleHcmJobs, oracleHcmConfig } from "./oracle-hcm.ts";
 import { discoverAmazonJobs, isAmazon } from "./amazon.ts";
 import { discoverSalesforceJobs, isSalesforce } from "./salesforce.ts";
 import { discoverGoogleCareersJobs, isGoogleCareers } from "./google-careers.ts";
+import { discoverRipplingJobs, isRippling } from "./rippling.ts";
+import { discoverMetaJobs, isMeta } from "./meta.ts";
 
 export type ScanFailure = { companyId: string; sourceId: string; sourceUrl: string; provider: string; message: string };
 export type SourceScanResult = {
@@ -59,12 +61,21 @@ async function assertPublicUrl(value: string): Promise<URL> {
   return url;
 }
 
+// Several career sites (metacareers.com among them) answer a self-identifying
+// crawler with a 4xx/5xx, so discovery requests present a mainstream browser
+// user agent by default. An adapter can override it through `init.headers`.
+const DEFAULT_USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+
 export async function fetchCareerPage(url: string): Promise<string> {
   const safeUrl = await assertPublicUrl(url);
   const response = await fetch(safeUrl, {
     redirect: "follow",
     signal: AbortSignal.timeout(15_000),
-    headers: { Accept: "text/html,application/xhtml+xml", "User-Agent": "JobFinderDiscovery/0.1 (+local development)" },
+    headers: {
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      "User-Agent": DEFAULT_USER_AGENT,
+    },
   });
   if (!response.ok) throw new Error(`Source returned HTTP ${response.status}.`);
   const contentType = response.headers.get("content-type") ?? "";
@@ -77,6 +88,7 @@ export async function fetchCareerPage(url: string): Promise<string> {
 }
 
 export type PublicJsonFetcher = (url: string, init?: RequestInit) => Promise<unknown>;
+export type PublicTextFetcher = (url: string, init?: RequestInit) => Promise<string>;
 
 export async function fetchPublicJson(url: string, init?: RequestInit): Promise<unknown> {
   const safeUrl = await assertPublicUrl(url);
@@ -84,7 +96,7 @@ export async function fetchPublicJson(url: string, init?: RequestInit): Promise<
     ...init,
     redirect: "follow",
     signal: AbortSignal.timeout(15_000),
-    headers: { Accept: "application/json", "User-Agent": "JobFinderDiscovery/0.1 (+local development)", ...init?.headers },
+    headers: { Accept: "application/json", "User-Agent": DEFAULT_USER_AGENT, ...init?.headers },
   });
   if (!response.ok) throw new Error(`Source returned HTTP ${response.status}.`);
   const contentType = response.headers.get("content-type") ?? "";
@@ -92,10 +104,28 @@ export async function fetchPublicJson(url: string, init?: RequestInit): Promise<
   return response.json();
 }
 
+// Content-type agnostic sibling of the fetchers above, for endpoints that return
+// a JSON body under a text/html content type. Keeps the same SSRF guard and caps.
+export async function fetchPublicText(url: string, init?: RequestInit): Promise<string> {
+  const safeUrl = await assertPublicUrl(url);
+  const response = await fetch(safeUrl, {
+    ...init,
+    redirect: "follow",
+    signal: AbortSignal.timeout(15_000),
+    headers: { "User-Agent": DEFAULT_USER_AGENT, ...init?.headers },
+  });
+  if (!response.ok) throw new Error(`Source returned HTTP ${response.status}.`);
+  if (Number(response.headers.get("content-length") ?? 0) > 5_000_000) throw new Error("Source response exceeded 5 MB.");
+  const body = await response.text();
+  if (body.length > 5_000_000) throw new Error("Source response exceeded 5 MB.");
+  return body;
+}
+
 export async function scanTargets(
   targets: TargetCompany[],
   fetchPage: (url: string) => Promise<string> = fetchCareerPage,
   fetchJson: PublicJsonFetcher = fetchPublicJson,
+  fetchText: PublicTextFetcher = fetchPublicText,
 ): Promise<ScanResult> {
   const scannedAt = new Date().toISOString();
   const jobs: JobPosting[] = [];
@@ -113,7 +143,15 @@ export async function scanTargets(
       let provider = "UNRESOLVED";
       try {
         let discovered: JobPosting[];
-        if (isAmazon(target)) {
+        if (isMeta(target)) {
+          provider = "META_CAREERS";
+          // One GraphQL search covers the whole site, so the careers and
+          // early-careers sources would otherwise return identical postings and
+          // fight over ownership of each row in saveJobs.
+          const primarySourceId = target.sources.find((candidate) => candidate.enabled && candidate.kind !== "EVENTS")?.id;
+          if (source.id !== primarySourceId) continue;
+          discovered = await discoverMetaJobs(source, target, scannedAt, fetchText);
+        } else if (isAmazon(target)) {
           provider = "AMAZON_JOBS";
           discovered = await discoverAmazonJobs(source, target, scannedAt, fetchJson);
         } else if (isSalesforce(target)) {
@@ -122,6 +160,9 @@ export async function scanTargets(
         } else if (isGoogleCareers(target)) {
           provider = "GOOGLE_CAREERS";
           discovered = await discoverGoogleCareersJobs(source, target, scannedAt, fetchPage);
+        } else if (isRippling(target)) {
+          provider = "RIPPLING_ALGOLIA";
+          discovered = await discoverRipplingJobs(source, target, scannedAt, fetchJson);
         } else if (eightfoldConfig(target)) {
           provider = "EIGHTFOLD";
           discovered = await discoverEightfoldJobs(source, target, scannedAt, fetchJson);

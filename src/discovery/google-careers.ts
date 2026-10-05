@@ -27,11 +27,17 @@ export function extractGoogleCareersJobs(html: string, source: TargetSource, tar
 }
 
 export async function discoverGoogleCareersJobs(source: TargetSource, target: TargetCompany, observedAt: string, fetchPage: (url: string) => Promise<string>) {
-  const jobs: JobPosting[] = [];
-  for (const query of discoveryQueries(target)) {
+  const queries = [...new Set(discoveryQueries(target).flatMap((query) => query === "new grad" ? [query, "university graduate"] : [query]))];
+  const results = await Promise.allSettled(queries.map(async (query) => {
     const params = new URLSearchParams({ q: query, location: "United States" });
     const html = await fetchPage(`https://www.google.com/about/careers/applications/jobs/results/?${params}`);
-    jobs.push(...extractGoogleCareersJobs(html, source, target, observedAt));
+    return extractGoogleCareersJobs(html, source, target, observedAt);
+  }));
+  const jobs = results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
+  if (results.every((result) => result.status === "rejected")) {
+    const messages = results.flatMap((result) => result.status === "rejected"
+      ? [result.reason instanceof Error ? result.reason.message : "Unknown Google Careers error."] : []);
+    throw new Error(`All Google Careers queries failed: ${[...new Set(messages)].join("; ")}`);
   }
   return [...new Map(jobs.map((job) => [job.canonicalUrl, job])).values()];
 }
