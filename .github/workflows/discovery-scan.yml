@@ -1,8 +1,10 @@
 name: Discovery scan
 
 on:
-  # Inngest owns the reliable five-minute production schedule. This workflow is
-  # retained as a manual fallback and for Discord outbox recovery.
+  # Emergency production fallback while the Inngest discovery deployment is
+  # being restored. Offset from the top of the hour to reduce GitHub queueing.
+  schedule:
+    - cron: "2/5 * * * *"
   workflow_dispatch:
 
 permissions:
