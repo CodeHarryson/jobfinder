@@ -35,14 +35,14 @@ export function idFor(companyId: string, url: string): string {
 
 export function employmentType(title: string, rawType = ""): JobPosting["employmentType"] {
   const text = `${title} ${rawType}`.toLowerCase();
-  if (/\b(?:intern|internship|co[ -]?op)\b/.test(text)) return "INTERNSHIP";
+  if (/\b(?:intern|internships?|co[ -]?op)\b/.test(text)) return "INTERNSHIP";
   if (/\bstudent researcher\b/.test(text)) return "EARLY_CAREER";
   if (/\b(?:new grad(?:uate)?|university graduate|college grad|graduate (?:role|program)|graduate .{0,30}\b(?:engineer|developer)|launch program|entry[ -]level|amts)\b/.test(text)) return "NEW_GRAD";
   if (/\b(?:early career|apprentice|apprenticeship)\b/.test(text)) return "EARLY_CAREER";
   return "OTHER";
 }
 
-const INTERNSHIP_ROLE = /\b(?:intern|internship|co[ -]?op)\b/i;
+const INTERNSHIP_ROLE = /\b(?:intern|internships?|co[ -]?op)\b/i;
 const NEW_GRAD_ROLE = /\b(?:new grad(?:uate)?|university graduate|college grad|graduate (?:role|program)|graduate .{0,30}\b(?:engineer|developer)|launch program|entry[ -]level|early career|amts)\b/i;
 const STUDENT_RESEARCH_ROLE = /\bstudent researcher\b/i;
 const NON_UNDERGRAD_INTERNSHIP = /\b(?:master(?:'s|s)?|mba|ph\.?d\.?|doctoral|doctorate|post[ -]?doc(?:toral)?|graduate .{0,30}\bintern|high school|secondary school)\b/i;

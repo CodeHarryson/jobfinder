@@ -13,14 +13,19 @@ const target: TargetCompany = {
 test("normalizes eligible Eightfold positions and rejects recruiting jobs", () => {
     const jobs = extractEightfoldJobs({ status: 200, data: { positions: [
       { id: 1, name: "Software Engineering Intern", standardizedLocations: ["Austin, TX, US"], department: "Intern", positionUrl: "/careers/job/1" },
+      { id: 4, name: "NVIDIA Ignite Internships: Software Engineering", standardizedLocations: ["Santa Clara, CA, US"], department: "Engineering", positionUrl: "/careers/job/893397948510" },
       { id: 2, name: "University Recruiting Program Manager", positionUrl: "/careers/job/2" },
       { id: 3, name: "Solution Architect Manager - Intern Program", positionUrl: "/careers/job/3" },
     ] } }, "https://jobs.nvidia.com", target.sources[0], target, "2026-08-19T00:00:00.000Z");
 
-  assert.equal(jobs.length, 1);
+  assert.equal(jobs.length, 2);
   assert.deepEqual(
     { title: jobs[0].title, employmentType: jobs[0].employmentType, canonicalUrl: jobs[0].canonicalUrl, extractionConfidence: jobs[0].extractionConfidence },
     { title: "Software Engineering Intern", employmentType: "INTERNSHIP", canonicalUrl: "https://jobs.nvidia.com/careers/job/1", extractionConfidence: 0.98 },
+  );
+  assert.deepEqual(
+    { title: jobs[1].title, employmentType: jobs[1].employmentType, canonicalUrl: jobs[1].canonicalUrl },
+    { title: "NVIDIA Ignite Internships: Software Engineering", employmentType: "INTERNSHIP", canonicalUrl: "https://jobs.nvidia.com/careers/job/893397948510" },
   );
 });
 
