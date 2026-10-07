@@ -27,11 +27,34 @@ test("normalizes Greenhouse jobs and structured office locations", () => {
 });
 
 test("uses the Greenhouse API instead of the configured landing page", async () => {
-  let requested = "";
+  const requested: string[] = [];
   const jobs = await discoverGreenhouseJobs(target.sources[0], target, "2026-08-20T20:00:00.000Z", async (url) => {
-    requested = url;
-    return { jobs: [] };
+    requested.push(url);
+    if (url.endsWith("/jobs")) return { jobs: [{ id: 123, title: "Software Engineering Intern", absolute_url: "https://example.com/jobs/123", location: { name: "Seattle, Washington" } }] };
+    return { id: 123, title: "Software Engineering Intern", absolute_url: "https://example.com/jobs/123", content: "<p>Build distributed data systems.</p>", location: { name: "Seattle, Washington" } };
+  });
+  assert.equal(jobs.length, 1);
+  assert.deepEqual(requested, [
+    "https://boards-api.greenhouse.io/v1/boards/databricks/jobs",
+    "https://boards-api.greenhouse.io/v1/boards/databricks/jobs/123",
+  ]);
+});
+
+test("does not download descriptions for ineligible Greenhouse roles", async () => {
+  const requested: string[] = [];
+  const jobs = await discoverGreenhouseJobs(target.sources[0], target, "2026-08-20T20:00:00.000Z", async (url) => {
+    requested.push(url);
+    return { jobs: [{ id: 456, title: "Senior Software Engineer", absolute_url: "https://example.com/jobs/456" }] };
   });
   assert.equal(jobs.length, 0);
-  assert.equal(requested, "https://boards-api.greenhouse.io/v1/boards/databricks/jobs?content=true");
+  assert.deepEqual(requested, ["https://boards-api.greenhouse.io/v1/boards/databricks/jobs"]);
+});
+
+test("retains an eligible listing when its Greenhouse detail request fails", async () => {
+  const jobs = await discoverGreenhouseJobs(target.sources[0], target, "2026-08-20T20:00:00.000Z", async (url) => {
+    if (url.endsWith("/jobs")) return { jobs: [{ id: 789, title: "Software Engineering Intern", absolute_url: "https://example.com/jobs/789", location: { name: "Seattle, Washington" } }] };
+    throw new Error("detail timed out");
+  });
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].description, "");
 });

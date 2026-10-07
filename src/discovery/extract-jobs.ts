@@ -49,7 +49,7 @@ const NON_UNDERGRAD_INTERNSHIP = /\b(?:master(?:'s|s)?|mba|ph\.?d\.?|doctoral|do
 const HIRING_TEAM_ROLE = /\b(?:recruiter|recruiting|talent acquisition|campus recruiting|university recruiting|program manager)\b|\bmanager\b.*\bintern(?:ship)? program\b/i;
 const NAVIGATION_TITLE = /^(?:early careers?|internships?(?: for students)?|university recruiting|explore |find |view |search jobs?|watch (?:the )?film)/i;
 
-function isEligibleEarlyCareerTitle(title: string): boolean {
+export function isEligibleEarlyCareerTitle(title: string): boolean {
   const normalized = title.trim();
   if (HIRING_TEAM_ROLE.test(normalized) || NAVIGATION_TITLE.test(normalized)) return false;
   if (NEW_GRAD_ROLE.test(normalized)) return true;

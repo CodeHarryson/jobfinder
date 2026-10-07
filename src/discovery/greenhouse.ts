@@ -1,6 +1,6 @@
 import { load } from "cheerio";
 import type { JobPosting, TargetCompany, TargetSource } from "../domain/opportunity.ts";
-import { employmentType, fingerprint, idFor, matchesTarget } from "./extract-jobs.ts";
+import { employmentType, fingerprint, idFor, isEligibleEarlyCareerTitle, matchesTarget } from "./extract-jobs.ts";
 
 type GreenhouseLocation = { name?: string };
 type GreenhouseJob = {
@@ -84,6 +84,28 @@ export async function discoverGreenhouseJobs(
 ): Promise<JobPosting[]> {
   const board = greenhouseBoard(target);
   if (!board) return [];
-  const payload = await fetchJson(`https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(board)}/jobs?content=true`);
-  return extractGreenhouseJobs(payload as GreenhouseResponse, source, target, observedAt);
+  const baseUrl = `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(board)}`;
+  const payload = await fetchJson(`${baseUrl}/jobs`) as GreenhouseResponse;
+  if (!Array.isArray(payload.jobs)) throw new Error("Greenhouse API returned an invalid response.");
+
+  // `content=true` can inflate large boards to several megabytes and regularly
+  // exceed the shared request timeout. The lightweight listing is enough to
+  // eliminate non-early-career roles before descriptions are downloaded.
+  const candidates = payload.jobs.filter((job) => job.id && isEligibleEarlyCareerTitle(job.title ?? ""));
+  const detailed: GreenhouseJob[] = new Array(candidates.length);
+  let nextCandidate = 0;
+  await Promise.all(Array.from({ length: Math.min(5, candidates.length) }, async () => {
+    while (nextCandidate < candidates.length) {
+      const index = nextCandidate++;
+      const candidate = candidates[index];
+      try {
+        detailed[index] = await fetchJson(`${baseUrl}/jobs/${candidate.id}`) as GreenhouseJob;
+      } catch {
+        // Keep the posting discoverable when one detail request is transiently
+        // unavailable; a later scan can enrich its description and fingerprint.
+        detailed[index] = candidate;
+      }
+    }
+  }));
+  return extractGreenhouseJobs({ jobs: detailed }, source, target, observedAt);
 }
