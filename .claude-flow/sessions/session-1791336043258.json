@@ -1,0 +1,14 @@
+{
+  "id": "session-1791336043258",
+  "startedAt": "2026-10-07T01:20:43.258Z",
+  "cwd": "/Users/codeharryson/Documents/Codex/jobfinder",
+  "context": {},
+  "metrics": {
+    "edits": 1,
+    "commands": 0,
+    "tasks": 0,
+    "errors": 0
+  },
+  "endedAt": "2026-10-07T16:42:14.682Z",
+  "duration": 55291429
+}

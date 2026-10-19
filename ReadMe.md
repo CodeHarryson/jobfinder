@@ -1,94 +1,313 @@
 # JobFinder
 
-JobFinder is a personal job-search copilot that watches selected companies, ranks new internships and recruiting events, and helps the user track applications. Later releases may submit eligible applications using approved profile data.
+JobFinder is a personal job-search radar for monitoring selected employers. It scans company career sites, normalizes U.S.-based openings across many applicant-tracking systems, records meaningful posting changes, and surfaces alerts in a web dashboard and Discord. An optional Gmail integration recognizes application milestones such as confirmations, assessments, interviews, rejections, and offers.
 
-The product also tracks applications, detects recruiting milestones, recommends preparation material, and coordinates study, interview, and event time with the user's calendar.
+The project is intentionally discovery-first: it helps a candidate find and track opportunities without submitting applications or inventing answers on the candidate's behalf.
 
-## Product principles
+## What it does today
 
-- **User control:** `review`, `assisted`, and `auto-submit` modes are configured per company or job filter.
-- **No fabricated answers:** uncertain, sensitive, legal, demographic, sponsorship, salary, or novel free-text questions always require review.
-- **Explainable matching:** every fit score includes evidence, missing qualifications, freshness, and confidence—not just a percentage.
-- **Responsible collection:** prefer company career feeds and permitted APIs. Do not bypass access controls, CAPTCHAs, or site terms.
-- **Idempotent automation:** a posting can never produce duplicate applications or duplicate calendar events.
+- Maintains a configurable watchlist of companies, career sources, role keywords, priorities, and UTC cron constraints.
+- Includes starter watchlists for Summer 2027 software engineering, finance, and consulting searches.
+- Scans up to 25 sources per scheduled run with bounded concurrency, source leases, and failure backoff.
+- Uses dedicated adapters for Greenhouse, Jibe/iCIMS, Ashby, Lever, Eightfold, Workday, Phenom, Oracle HCM, Amazon Jobs, Salesforce Careers, Google Careers, Rippling, and Meta Careers.
+- Falls back to structured data and accessible HTML extraction for unknown providers.
+- Filters results to U.S. locations and deduplicates postings by company and canonical URL.
+- Preserves first-seen timestamps, fingerprints content, and distinguishes new roles from material updates.
+- Deactivates a missing posting only after two successful scans omit it, reducing false closures caused by transient source changes.
+- Stores targets, jobs, events, scan history, schedules, notifications, and delivery state in PostgreSQL.
+- Provides an in-app notification inbox with read, mark-all-read, and dismiss actions.
+- Queues Discord alerts in a durable outbox and retries transient delivery failures with backoff.
+- Imports direct `rsvp.withgoogle.com/events/...` event pages and can send an immediate Discord event alert.
+- Optionally reads Gmail metadata and snippets to infer application status and create preparation-block proposals.
 
-## Release-one scope: discovery and tracking
+## Current boundaries
 
-1. Import target companies by CSV and manage a candidate profile plus versioned resumes.
-2. Poll company career and early-career/event sources on a user schedule (default every minute, subject to source rate limits).
-3. Normalize and deduplicate internships, early-career roles, and recruiting events as distinct opportunity types.
-4. Rank opportunities by resume match, preferences, hard requirements, freshness, and deadline risk.
-5. Notify the user with an explanation and an open/save/dismiss action; events also offer registration and calendar actions.
-6. Open the company's application page for user-completed applications.
-7. Track application stages manually and preserve an auditable timeline.
-8. Record the application destination so a future release can assess assisted or automatic application support independently from discovery.
+JobFinder does **not** currently rank roles against a resume, fill forms, submit applications, write calendar events, or automatically discover events from every configured events page. The Applications view and broader ranking/application automation described in the product documents are future work.
 
-Release one does **not** fill or submit applications. Discovery is application-platform agnostic: it watches the career and early-career pages supplied or discovered for every target company, follows job and event listings, and detects matching changes regardless of where an application or event registration is hosted. Greenhouse and other provider-specific adapters are considered later for application automation only.
+## Architecture
 
-## Documents
+```text
+                         +----------------------+
+                         |  Next.js dashboard   |
+                         +----------+-----------+
+                                    |
+                         Route handlers under /api
+                                    |
+            +-----------------------+-----------------------+
+            |                       |                       |
+     target management       discovery pipeline      Gmail integration
+            |                       |                       |
+            |              provider adapters +       Google OAuth/API
+            |               generic extractor              |
+            |                       |                message classifier
+            +-----------------------+-----------------------+
+                                    |
+                              PostgreSQL
+                         (schema created lazily)
+                                    |
+                      notification delivery outbox
+                                    |
+                              Discord webhook
 
-- [Product specification](docs/product-spec.md)
-- [System architecture](docs/architecture.md)
-- [Delivery roadmap](docs/roadmap.md)
-
-## Recommended implementation stack
-
-- Web: Next.js + TypeScript
-- API/workers: TypeScript with PostgreSQL, Redis, and a durable job queue
-- Future browser-assisted applications: Playwright workers isolated per user
-- AI: provider-independent structured-output adapter with embeddings for retrieval
-- Auth: OIDC provider; encrypted OAuth token vault for Gmail/calendar connections
-- Observability: OpenTelemetry, structured logs, error tracking, and immutable audit events
-
-The architecture keeps the scheduler and browser automation outside the web request path so the product can begin as a modular monolith and split into services only when load requires it.
-
-## Run locally
-
-```bash
-npm install
-npm run dev
+Inngest cron (every 5 minutes)
+  ├─ claims due discovery sources → scans → records changes → drains Discord outbox
+  └─ performs incremental Gmail synchronization
 ```
 
-Open `http://localhost:3000`. The current foundation includes the release-one dashboard, target-company onboarding, three starter watchlists, separate career/early-career/event sources, role and event filters, normalized job/event domain types, and the provider-neutral discovery strategy interface.
+The application is a modular Next.js monolith. HTTP routes, scheduled functions, provider adapters, domain types, and persistence interfaces remain separated so background workloads can be split out later without changing the core domain model.
 
-The discovery pipeline is operational through **Scan now**. It routes configured companies through reusable Greenhouse, Jibe/iCIMS, Ashby, Lever, Eightfold, Workday, Phenom, and Oracle HCM adapters, with a conservative HTML fallback for unknown providers. Results are filtered by role keywords and U.S. location, then deduplicated by canonical URL. A landing page that loads but exposes no job records is reported as a failure and cannot deactivate previously discovered jobs. Targets, sources, opportunities, provider-level scan health, and scan history are persisted in a local SQLite database at `data/jobfinder.sqlite`; existing browser-stored targets are migrated automatically on first load, with browser storage retained as an offline fallback. The latest provider counts and failures are available at `GET /api/discovery/health`.
+### Discovery lifecycle
 
-Neon Serverless Postgres is the durable application database in development and on Render. `DATABASE_URL` is consumed only by server routes. SQLite remains an isolated test and one-time local migration adapter. The protected `GET /api/discovery/scheduled` endpoint atomically leases overdue sources and preserves each source's five-field UTC cron constraint. Set `CRON_SECRET` in production and send it as a bearer token. New and materially updated postings are recorded as notification candidates and exposed by `GET /api/notifications?unread=true`.
+1. The scheduler atomically claims due sources with PostgreSQL row locks and a four-minute lease.
+2. The scanner identifies a supported provider or uses the generic HTML extractor.
+3. Fetches are limited to public HTTP(S) addresses, time out after 15 seconds, and reject responses larger than 5 MB.
+4. Provider results are normalized into the common `JobPosting` model.
+5. Non-U.S. roles are filtered out, and duplicates are resolved in favor of the higher-confidence extraction.
+6. PostgreSQL upserts the active jobs and records new or materially changed postings.
+7. When Discord is configured, changes are inserted into a durable, idempotent delivery queue.
+8. Scan history and per-source health are retained for the health endpoint and failure alerts.
 
-Outbound notification delivery, rendered-browser fallback, and event extraction remain upcoming stages.
+Structured providers run more frequently than generic HTML sources. Consecutive failures use exponential backoff up to six hours, and cron expressions remain constraints on the computed next-run time. Sources with repeated failures generate a rate-limited Discord health alert.
 
-The in-app notification inbox is available from the dashboard. It shows unread counts and enriched job/company details, and supports marking one or all notifications read and dismissing individual items. Outbound email requires provisioning a messaging integration; this repository does not install an unconfigured provider SDK or store placeholder credentials.
+## Technology stack
 
-Discord is the primary out-of-app delivery channel. Set `DISCORD_WEBHOOK_URL` on Render to enable queuing, and add the same webhook plus `DATABASE_URL` as GitHub Actions repository secrets so the scheduled workflow can deliver alerts. New and materially updated roles are queued in a durable outbox, sent as rich Discord embeds, deduplicated by notification and channel, and retried with exponential backoff after transient failures.
+| Area | Technology |
+|---|---|
+| Web application | Next.js 16 App Router, React 19, TypeScript 5.9 |
+| Database | PostgreSQL via `@neondatabase/serverless` |
+| Scheduling | Inngest 4 |
+| Extraction | Provider APIs, Cheerio, JSON-LD/HTML fallback |
+| Notifications | In-app inbox and Discord webhooks |
+| Email integration | Google OAuth, Gmail API, Google Calendar API scopes |
+| Tests | Node test runner, Vitest, Testing Library, jsdom |
+| Deployment | Render Blueprint plus an external PostgreSQL database |
 
-## Deploy on Render
+## Repository layout
 
-Connect this GitHub repository to a Render Blueprint using [`render.yaml`](render.yaml). It creates one free Node web service, builds with `npm ci && npm run build`, and starts the Next.js server. The existing Neon database remains the source of truth; no data migration is needed. Enter `DATABASE_URL`, `CRON_SECRET`, `DISCORD_WEBHOOK_URL`, `INNGEST_EVENT_KEY`, and `INNGEST_SIGNING_KEY` when Render prompts for secrets. Use the existing values from the previous host so the app retains its database and notification integrations. If Discord or Inngest is not in use, its corresponding variables can be omitted from the service after creation.
+```text
+src/
+  app/                   Next.js pages, styling, and API route handlers
+  components/            Dashboard UI and browser tests
+  discovery/             Scheduling, scanning, extraction, and ATS adapters
+  domain/                Opportunity models and starter company presets
+  email/                 Google OAuth, Gmail sync, classification, encryption
+  inngest/               Scheduled discovery and Gmail functions
+  notifications/         Discord payloads, delivery, retry, and health alerts
+  storage/               Repository contract and PostgreSQL implementation
+scripts/                  Operational and watchlist synchronization scripts
+docs/                     Product specification, architecture, and roadmap
+.github/workflows/        Manual discovery/Discord fallback workflow
+render.yaml               Render Blueprint configuration
+```
 
-Once the service is live, verify its `/` and `/api/discovery/health` endpoints and sync `https://jobfinder-50iy.onrender.com/api/inngest` in Inngest. Inngest owns the durable five-minute discovery schedule. Scan, Discord delivery, and source-health alerts share one durable step to keep execution usage bounded. The [GitHub Actions discovery workflow](.github/workflows/discovery-scan.yml) is a manual fallback that also drains queued Discord alerts; add repository Actions secrets named `CRON_SECRET`, `DATABASE_URL`, and `DISCORD_WEBHOOK_URL` with the same values configured on Render.
+## Prerequisites
 
-Each source has durable scheduling state with a next-run time, a four-minute lease, its latest provider, and a consecutive-failure count. Curated companies using structured providers run every five minutes, other structured providers every fifteen minutes, and generic HTML sources every thirty minutes. Failures back off exponentially to a maximum of six hours. Cron expressions remain constraints on the calculated next run, and an overdue source remains eligible on later invocations instead of being lost when an exact minute is missed. Each invocation claims at most 25 sources, prioritizing the curated cohort. The manual GitHub fallback fails visibly when any claimed source fails instead of reporting a false-green run.
+- Node.js 24 (the deployed service is pinned to Node `24.21.0`)
+- npm
+- A PostgreSQL connection string; Neon works well, but the code only requires compatible PostgreSQL
+- Optional: Inngest for durable schedules
+- Optional: a Discord webhook for external alerts
+- Optional: a Google Cloud OAuth client for Gmail tracking
 
-If Gmail tracking is in use, also configure its Google and Gmail variables from [`.env.example`](.env.example), update `GOOGLE_OAUTH_REDIRECT_URI` and the Google OAuth client's authorized redirect URI to the new `https://YOUR-SERVICE.onrender.com/api/google/callback`, and sync `https://YOUR-SERVICE.onrender.com/api/inngest` in Inngest. The Inngest Gmail sync retains its separate five-minute schedule.
+## Local setup
+
+1. Install dependencies:
+
+   ```bash
+   npm install
+   ```
+
+2. Create the local environment file:
+
+   ```bash
+   cp .env.example .env.local
+   ```
+
+3. Set at least `DATABASE_URL` in `.env.local`:
+
+   ```dotenv
+   DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
+   ```
+
+   The repository creates and evolves its tables on first use; there is no separate migration command at present.
+
+4. Start the development server:
+
+   ```bash
+   npm run dev
+   ```
+
+5. Open [http://localhost:3000](http://localhost:3000), add a company or starter watchlist, and select **Scan now**.
+
+The server cannot persist data without `DATABASE_URL`. Discord, Inngest, and Google settings are optional unless you use those features.
+
+## Configuration
+
+| Variable | Required | Purpose |
+|---|---:|---|
+| `DATABASE_URL` | Yes | Server-side PostgreSQL connection string. |
+| `CRON_SECRET` | Production automation | Bearer token for scheduled, retry, and Google operational routes. Production routes fail closed when it is absent. |
+| `DISCORD_WEBHOOK_URL` | No | Enables durable job alerts, source-health alerts, and event notifications. |
+| `INNGEST_EVENT_KEY` | For hosted Inngest | Authenticates events sent to Inngest. |
+| `INNGEST_SIGNING_KEY` | For hosted Inngest | Verifies calls from Inngest to the application. |
+| `GOOGLE_CLIENT_ID` | Gmail only | Google OAuth web-client ID. |
+| `GOOGLE_CLIENT_SECRET` | Gmail only | Google OAuth web-client secret. |
+| `GOOGLE_OAUTH_REDIRECT_URI` | Gmail only | OAuth callback; defaults to `<origin>/api/google/callback`. |
+| `GMAIL_ALLOWED_EMAIL` | Gmail only | Restricts this personal instance to one Google account. |
+| `GOOGLE_TOKEN_ENCRYPTION_KEY` | Gmail only | Encrypts OAuth tokens and signs OAuth state. Generate with `openssl rand -base64 32`. |
+
+Never expose these variables through client-side `NEXT_PUBLIC_` names or commit a populated environment file.
+
+## Using the dashboard
+
+### Target companies
+
+A target contains a company name and domain, priority, role and event keywords, and one or more sources:
+
+- `CAREERS` — the primary jobs page and the only required source.
+- `EARLY_CAREERS` — an optional student or university jobs source.
+- `EVENTS` — an optional event source retained for the expanding event pipeline; normal job scans skip it.
+
+The UI supports creating, editing, and removing targets. It also offers curated starter cohorts. Cron values use five-field UTC syntax. The scheduler still applies provider-aware minimum intervals and failure backoff, so a `* * * * *` constraint does not imply a fetch every minute.
+
+### Opportunity discovery
+
+**Scan now** calls the on-demand discovery endpoint. Large watchlists are processed in rotating batches so repeated scans cover every target. Results show the normalized title, company, locations, employment type, application link, and extraction confidence.
+
+Role keywords are applied by provider/extraction logic to focus results on the configured search. Location filtering is intentionally conservative; ambiguous two-letter country/location values are not assumed to be U.S. states.
+
+### Notifications and Discord
+
+Every new or materially updated posting creates an in-app notification. When `DISCORD_WEBHOOK_URL` is set, the same change is queued once per channel. The scheduled Inngest function drains the outbox, respects Discord rate limits, and retries failures. A protected retry route and a command-line delivery script are also available for operations.
+
+### Event import
+
+The Events view currently accepts direct WithGoogle RSVP URLs. Choose an existing watched company and paste a URL matching:
+
+```text
+https://rsvp.withgoogle.com/events/...
+```
+
+The server fetches and extracts the event, saves it by canonical URL, and reports whether it was new or updated. Other event hosts and automatic event-source scanning are not implemented yet.
 
 ## Gmail application tracking
 
-The Gmail-first application tracker runs independently from job discovery, so existing discovery scans and Discord notifications are unchanged. A durable Inngest function checks Gmail every five minutes, classifies application confirmations, assessments, interview requests, scheduled interviews, rejections, and offers, and deduplicates messages by Gmail message ID. Only metadata, a short Gmail snippet, classification evidence, and scheduling facts are stored; full message bodies and OAuth tokens are not stored in plaintext.
+Gmail tracking is independent of discovery and can be omitted entirely.
 
-Create a Google Cloud OAuth web client, enable the Gmail API and Google Calendar API, and configure the variables in `.env.example`. Add these authorized redirect URIs:
+1. In Google Cloud, enable the Gmail API and Google Calendar API.
+2. Create an OAuth web application.
+3. Add the appropriate callback URI:
 
-- `http://localhost:3000/api/google/callback`
-- `https://YOUR-SERVICE.onrender.com/api/google/callback`
+   ```text
+   http://localhost:3000/api/google/callback
+   https://YOUR_HOST/api/google/callback
+   ```
 
-Then open `/api/google/connect` to authorize the single account named by `GMAIL_ALLOWED_EMAIL`. The requested Gmail scope is read-only. Calendar access is limited to events and free/busy data. The current safety policy creates preparation-block proposals for detected OA/interview dates; it does not write calendar events until a later approval endpoint is added.
+4. Configure all `GOOGLE_*` variables and `GMAIL_ALLOWED_EMAIL`.
+5. Visit `/api/google/connect` and authorize the configured account.
+6. Configure Inngest, or invoke `POST /api/google/sync` with the automation bearer token.
 
-Protected operational endpoints use `Authorization: Bearer $CRON_SECRET` in production:
+The Gmail scope is read-only. JobFinder stores message IDs, headers/metadata, a short snippet, classification evidence, and extracted scheduling facts rather than complete message bodies. OAuth access and refresh tokens are encrypted before persistence. Calendar access is currently used to support scheduling context and preparation proposals; JobFinder does not create calendar events.
 
-- `GET /api/google/status` returns connection, classification, and proposal counts.
-- `POST /api/google/sync` queues an immediate Gmail sync.
-- `/api/inngest` serves the durable five-minute sync function.
+Recognized categories include application confirmations, online assessments, interview requests, scheduled interviews, rejections, and offers. Message IDs make synchronization idempotent.
 
-Validation commands:
+## API reference
+
+All bodies and responses are JSON unless noted otherwise.
+
+| Method | Route | Description |
+|---|---|---|
+| `GET` | `/api/targets` | List watched companies and sources. |
+| `POST` | `/api/targets` | Create one target or `{ "targets": [...] }` containing up to 50 targets. |
+| `PUT` | `/api/targets/:id` | Replace a target whose body ID matches the route ID. |
+| `DELETE` | `/api/targets/:id` | Remove a target. |
+| `GET` | `/api/opportunities` | List active normalized jobs. |
+| `GET` | `/api/events` | List active recruiting events. |
+| `POST` | `/api/events` | Import a WithGoogle event with `{ "url", "companyId" }`. |
+| `POST` | `/api/discovery/scan` | Run an on-demand rotating batch; optionally accepts `{ "targets": [...] }`. |
+| `GET` | `/api/discovery/scheduled` | Claim and scan due sources; protected in production. |
+| `GET` | `/api/discovery/health` | Return the latest scan, failures, source results, and company health. |
+| `GET` | `/api/notifications?unread=true` | List all or unread in-app notifications. |
+| `PATCH` | `/api/notifications` | Mark every notification read. |
+| `PATCH` | `/api/notifications/:id` | Mark one notification read. |
+| `DELETE` | `/api/notifications/:id` | Dismiss one notification. |
+| `POST` | `/api/notifications/discord/retry` | Drain queued Discord deliveries; protected in production. |
+| `GET` | `/api/google/connect` | Begin Google OAuth. |
+| `GET` | `/api/google/callback` | Complete Google OAuth. |
+| `GET` | `/api/google/status` | Return Gmail connection and classification counts; protected. |
+| `POST` | `/api/google/sync` | Queue an immediate Gmail sync; protected. |
+| `GET/POST/PUT` | `/api/inngest` | Inngest serve endpoint. |
+
+Protected routes expect:
+
+```http
+Authorization: Bearer YOUR_CRON_SECRET
+```
+
+Example health request:
+
+```bash
+curl http://localhost:3000/api/discovery/health
+```
+
+Example scheduled scan:
+
+```bash
+curl --fail \
+  --header "Authorization: Bearer $CRON_SECRET" \
+  http://localhost:3000/api/discovery/scheduled
+```
+
+## Scheduled operation
+
+The recommended production scheduler is Inngest. After deployment, sync:
+
+```text
+https://YOUR_HOST/api/inngest
+```
+
+Two functions run every five minutes:
+
+- `scheduled-job-discovery` claims due sources, scans them, drains Discord job alerts, and evaluates source-health alerts.
+- `gmail-application-status-sync` incrementally syncs all connected Gmail accounts.
+
+Both functions have concurrency limited to one. Discovery retries twice; Gmail sync retries three times.
+
+The workflow in `.github/workflows/discovery-scan.yml` is a manual operational fallback. It invokes the protected scheduled endpoint and then drains the Discord outbox using repository secrets. It is not the primary scheduler.
+
+## Deploying on Render
+
+[`render.yaml`](render.yaml) defines a free Node web service:
+
+- build: `npm ci && npm run build`
+- start: `npm run start -- --hostname 0.0.0.0`
+- health check: `/`
+- Node: `24.21.0`
+
+To deploy:
+
+1. Connect the repository to a Render Blueprint.
+2. Supply `DATABASE_URL` and `CRON_SECRET` when prompted.
+3. Add Discord, Inngest, and Google variables for the integrations you use.
+4. Deploy and verify `/` and `/api/discovery/health`.
+5. Sync `https://YOUR_HOST/api/inngest` in Inngest.
+6. If Gmail is enabled, update both `GOOGLE_OAUTH_REDIRECT_URI` and the authorized URI in Google Cloud.
+
+The deployment uses the external PostgreSQL database as its source of truth, so redeploying the web service does not discard application data.
+
+## Development commands
+
+```bash
+npm run dev       # start the Next.js development server
+npm run build     # create a production build
+npm run start     # run the production server after a build
+npm test          # run Node unit tests and browser-component tests
+npm run test:ui   # run Vitest/jsdom component tests only
+npm run typecheck # run TypeScript without emitting files
+npm run lint      # run ESLint across the repository
+```
+
+Before opening a change, run:
 
 ```bash
 npm test
@@ -96,3 +315,47 @@ npm run typecheck
 npm run lint
 npm run build
 ```
+
+Tests cover domain validation, company presets, extraction, provider adapters, batching, cron and schedule behavior, source health, Discord delivery, Gmail classification/encryption, repository behavior, and dashboard interactions.
+
+## Adding or repairing a provider adapter
+
+Provider selection is centralized in `src/discovery/scan-targets.ts`. An adapter should:
+
+1. Detect only the provider configuration it understands.
+2. Fetch through the guarded public fetch helpers where possible.
+3. Return normalized `JobPosting` records with stable canonical and application URLs.
+4. Preserve source evidence and use an honest extraction-confidence value.
+5. Avoid treating an empty landing page as a successful zero-result scan when listings were not actually extractable.
+6. Add fixtures or mocked API responses and focused tests.
+
+Discovery must remain safe and respectful: do not bypass authentication, CAPTCHAs, access controls, or site terms.
+
+## Reliability and security decisions
+
+- Source URLs are checked against loopback, link-local, and private network targets to reduce SSRF risk.
+- External fetches have protocol, timeout, content-type, and response-size checks.
+- Scheduled routes fail closed in production without `CRON_SECRET`.
+- PostgreSQL leases and `SKIP LOCKED` prevent two scheduler instances from claiming the same source.
+- Job changes and Discord deliveries use uniqueness constraints for idempotency.
+- Existing jobs survive failed extraction; only successful omissions contribute to deactivation.
+- Discord delivery uses an outbox, rate-limit handling, and exponential retries.
+- Google OAuth state is signed and short-lived; tokens are encrypted at rest.
+- The Gmail connection is restricted to the explicitly configured email address.
+- Retrieved web pages and emails are treated as untrusted data, not instructions.
+
+This remains a personal-instance application and does not yet include end-user authentication or multi-tenant authorization. Do not expose it publicly without an appropriate access-control layer.
+
+## Product documentation
+
+- [Product specification](docs/product-spec.md) — goals, user journeys, policy, and planned capabilities.
+- [System architecture](docs/architecture.md) — the longer-term module and data-model design.
+- [Delivery roadmap](docs/roadmap.md) — staged implementation plan beyond the current release.
+
+These documents describe both implemented and planned behavior. This README is the source of truth for running the repository as it exists today.
+
+## Contributing
+
+Keep changes small, typed, tested, and provider-neutral where possible. Preserve user control, explainability, idempotency, and responsible collection as design constraints. When behavior or configuration changes, update this README and the relevant document under `docs/` in the same pull request.
+
+No license file is currently included, so the repository should be treated as all rights reserved unless the owner adds a license.
