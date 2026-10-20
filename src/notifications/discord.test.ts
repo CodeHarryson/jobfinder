@@ -24,7 +24,7 @@ test("sends an event-specific Discord alert", async () => {
 test("stops claiming deliveries after Discord rate limits a webhook", async () => {
   const original = process.env.DISCORD_WEBHOOK_URL;
   process.env.DISCORD_WEBHOOK_URL = "https://discord.example/webhook";
-  const delivery: NotificationDelivery = { id: "d1", attempts: 1, notification: {
+  const delivery: NotificationDelivery = { id: "d1", channel: "DISCORD", attempts: 1, notification: {
     id: "n1", jobId: "j1", companyId: "c1", kind: "NEW", createdAt: "2026-09-18T00:00:00.000Z",
     readAt: null, companyName: "Notion", jobTitle: "Intern", applicationUrl: "https://example.com/jobs/1",
   } };
@@ -44,6 +44,36 @@ test("stops claiming deliveries after Discord rate limits a webhook", async () =
   } finally {
     if (original === undefined) delete process.env.DISCORD_WEBHOOK_URL;
     else process.env.DISCORD_WEBHOOK_URL = original;
+  }
+});
+
+test("queues and routes alerts independently for both Discord webhooks", async () => {
+  const primary = process.env.DISCORD_WEBHOOK_URL;
+  const secondary = process.env.DISCORD_SECONDARY_WEBHOOK_URL;
+  process.env.DISCORD_WEBHOOK_URL = "https://discord.example/primary";
+  process.env.DISCORD_SECONDARY_WEBHOOK_URL = "https://discord.example/secondary";
+  const delivery: NotificationDelivery = { id: "d2", channel: "DISCORD_SECONDARY", attempts: 1, notification: {
+    id: "n2", jobId: "j2", companyId: "c2", kind: "NEW", createdAt: "2026-10-20T00:00:00.000Z",
+    readAt: null, companyName: "Acme", jobTitle: "Intern", applicationUrl: "https://example.com/jobs/2",
+  } };
+  let queuedChannels: unknown;
+  let requestedUrl = "";
+  const repository = {
+    enqueueDiscordDeliveries: async (_changes: unknown, channels: unknown) => { queuedChannels = channels; return 2; },
+    claimDiscordDeliveries: async () => requestedUrl ? [] : [delivery],
+    completeDiscordDelivery: async () => undefined,
+  } as unknown as Repository;
+  try {
+    const result = await dispatchDiscordNotifications(repository, [], async (url) => {
+      requestedUrl = String(url);
+      return new Response('{"id":"message-2"}', { status: 200, headers: { "content-type": "application/json" } });
+    });
+    assert.deepEqual(queuedChannels, ["DISCORD", "DISCORD_SECONDARY"]);
+    assert.match(requestedUrl, /^https:\/\/discord\.example\/secondary\?wait=true$/);
+    assert.deepEqual(result, { enabled: true, queued: 2, sent: 1, failed: 0 });
+  } finally {
+    if (primary === undefined) delete process.env.DISCORD_WEBHOOK_URL; else process.env.DISCORD_WEBHOOK_URL = primary;
+    if (secondary === undefined) delete process.env.DISCORD_SECONDARY_WEBHOOK_URL; else process.env.DISCORD_SECONDARY_WEBHOOK_URL = secondary;
   }
 });
 
@@ -129,7 +159,7 @@ test("releases the cooldown claim when Discord rejects the alert", async () => {
     const result = await dispatchSourceFailureAlerts(repository, new Date("2026-09-30T02:05:00.000Z"),
       async () => new Response("", { status: 500 }));
     assert.deepEqual(result, { enabled: true, alerted: 0, suppressed: 0, failed: 1 });
-    assert.equal(cooldowns.has("s1"), false);
+    assert.equal(cooldowns.has("s1:DISCORD"), false);
   });
 });
 
@@ -139,11 +169,11 @@ test("clears the cooldown for a source that is scanning cleanly again", async ()
       listScanHistory: async () => [{ startedAt: "2026-09-30T02:00:00.000Z", failures: [],
         sourceResults: [{ companyId: "meta", sourceId: "s1", provider: "META_CAREERS", discoveredCount: 6 }] }],
     });
-    cooldowns.set("s1", Date.parse("2026-09-30T00:00:00.000Z"));
+    cooldowns.set("s1:DISCORD", Date.parse("2026-09-30T00:00:00.000Z"));
     const result = await dispatchSourceFailureAlerts(repository, new Date("2026-09-30T02:05:00.000Z"),
       async () => new Response("{}", { status: 200 }));
     assert.deepEqual(result, { enabled: true, alerted: 0, suppressed: 0, failed: 0 });
-    assert.equal(cooldowns.has("s1"), false);
+    assert.equal(cooldowns.has("s1:DISCORD"), false);
   });
 });
 

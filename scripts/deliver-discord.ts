@@ -2,9 +2,9 @@ import { dispatchDiscordNotifications } from "../src/notifications/discord.ts";
 import { PostgresRepository } from "../src/storage/postgres-repository.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
-const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
-if (!databaseUrl || !webhookUrl) {
-  throw new Error("DATABASE_URL and DISCORD_WEBHOOK_URL are required for Discord delivery.");
+const hasWebhook = process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SECONDARY_WEBHOOK_URL;
+if (!databaseUrl || !hasWebhook) {
+  throw new Error("DATABASE_URL and at least one Discord webhook are required for Discord delivery.");
 }
 
 const result = await dispatchDiscordNotifications(new PostgresRepository(databaseUrl));

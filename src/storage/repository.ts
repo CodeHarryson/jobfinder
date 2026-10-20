@@ -1,5 +1,5 @@
 import type { JobPosting, RecruitingEvent, TargetCompany } from "../domain/opportunity.ts";
-import type { DiscoveryChange, NotificationDelivery, NotificationItem } from "./jobfinder-repository.ts";
+import type { DiscordChannel, DiscoveryChange, NotificationDelivery, NotificationItem } from "./jobfinder-repository.ts";
 
 export type DiscoveryHealth = {
   startedAt: string; finishedAt: string; targetCount: number; jobCount: number;
@@ -75,7 +75,7 @@ export interface Repository {
   markNotificationRead(id: string): Promise<boolean>;
   markAllNotificationsRead(): Promise<number>;
   deleteNotification(id: string): Promise<boolean>;
-  enqueueDiscordDeliveries(changes: DiscoveryChange[]): Promise<number>;
+  enqueueDiscordDeliveries(changes: DiscoveryChange[], channels?: DiscordChannel[]): Promise<number>;
   claimDiscordDeliveries(limit?: number, now?: Date): Promise<NotificationDelivery[]>;
   completeDiscordDelivery(id: string, externalId: string): Promise<void>;
   failDiscordDelivery(id: string, attempts: number, error: string, retryAfterMs?: number): Promise<void>;

@@ -147,7 +147,8 @@ The server cannot persist data without `DATABASE_URL`. Discord, Inngest, and Goo
 |---|---:|---|
 | `DATABASE_URL` | Yes | Server-side PostgreSQL connection string. |
 | `CRON_SECRET` | Production automation | Bearer token for scheduled, retry, and Google operational routes. Production routes fail closed when it is absent. |
-| `DISCORD_WEBHOOK_URL` | No | Enables durable job alerts, source-health alerts, and event notifications. |
+| `DISCORD_WEBHOOK_URL` | No | Primary destination for durable job alerts, source-health alerts, and event notifications. |
+| `DISCORD_SECONDARY_WEBHOOK_URL` | No | Optional second Discord destination with independent outbox delivery and retries. |
 | `INNGEST_EVENT_KEY` | For hosted Inngest | Authenticates events sent to Inngest. |
 | `INNGEST_SIGNING_KEY` | For hosted Inngest | Verifies calls from Inngest to the application. |
 | `GOOGLE_CLIENT_ID` | Gmail only | Google OAuth web-client ID. |
@@ -178,7 +179,7 @@ Role keywords are applied by provider/extraction logic to focus results on the c
 
 ### Notifications and Discord
 
-Every new or materially updated posting creates an in-app notification. When `DISCORD_WEBHOOK_URL` is set, the same change is queued once per channel. The scheduled Inngest function drains the outbox, respects Discord rate limits, and retries failures. A protected retry route and a command-line delivery script are also available for operations.
+Every new or materially updated posting creates an in-app notification. When either Discord webhook is set, the same change is queued once for each configured destination. Each destination has independent delivery state, rate-limit handling, and retries, so one failing webhook does not duplicate alerts on the other. A protected retry route and a command-line delivery script are also available for operations.
 
 ### Event import
 
@@ -359,3 +360,4 @@ These documents describe both implemented and planned behavior. This README is t
 Keep changes small, typed, tested, and provider-neutral where possible. Preserve user control, explainability, idempotency, and responsible collection as design constraints. When behavior or configuration changes, update this README and the relevant document under `docs/` in the same pull request.
 
 No license file is currently included, so the repository should be treated as all rights reserved unless the owner adds a license.
+

@@ -13,7 +13,8 @@ type JobRow = {
 };
 export type DiscoveryChange = { id: string; jobId: string; companyId: string; kind: "NEW" | "UPDATED"; createdAt: string; readAt: string | null };
 export type NotificationItem = DiscoveryChange & { companyName: string; jobTitle: string; applicationUrl: string };
-export type NotificationDelivery = { id: string; notification: NotificationItem; attempts: number };
+export type DiscordChannel = "DISCORD" | "DISCORD_SECONDARY";
+export type NotificationDelivery = { id: string; channel: DiscordChannel; notification: NotificationItem; attempts: number };
 
 export class JobFinderRepository {
   private readonly db: DatabaseSync;
@@ -282,27 +283,27 @@ export class JobFinderRepository {
     return Number(this.db.prepare("DELETE FROM discovery_changes WHERE id=?").run(id).changes) > 0;
   }
 
-  enqueueDiscordDeliveries(changes: DiscoveryChange[]): number {
+  enqueueDiscordDeliveries(changes: DiscoveryChange[], channels: DiscordChannel[] = ["DISCORD"]): number {
     const statement = this.db.prepare(`INSERT INTO notification_deliveries(id,change_id,channel,status,attempts,next_attempt_at,created_at,updated_at)
-      VALUES(?,?,'DISCORD','PENDING',0,?,?,?) ON CONFLICT(change_id,channel) DO NOTHING`);
+      VALUES(?,?,?,'PENDING',0,?,?,?) ON CONFLICT(change_id,channel) DO NOTHING`);
     let created = 0;
     for (const change of changes) {
       const now = new Date().toISOString();
-      created += Number(statement.run(crypto.randomUUID(), change.id, now, now, now).changes);
+      for (const channel of channels) created += Number(statement.run(crypto.randomUUID(), change.id, channel, now, now, now).changes);
     }
     return created;
   }
 
   claimDiscordDeliveries(limit = 10, now = new Date()): NotificationDelivery[] {
-    const rows = this.db.prepare(`SELECT nd.id,nd.attempts,dc.id AS change_id,dc.job_id,dc.company_id,dc.kind,dc.created_at,dc.read_at,
+    const rows = this.db.prepare(`SELECT nd.id,nd.channel,nd.attempts,dc.id AS change_id,dc.job_id,dc.company_id,dc.kind,dc.created_at,dc.read_at,
       tc.name AS company_name,jp.title AS job_title,jp.application_url
       FROM notification_deliveries nd JOIN discovery_changes dc ON dc.id=nd.change_id
       JOIN target_companies tc ON tc.id=dc.company_id JOIN job_postings jp ON jp.id=dc.job_id
-      WHERE nd.channel='DISCORD' AND nd.status IN ('PENDING','FAILED') AND nd.next_attempt_at<=?
-      AND jp.active=1 AND jp.missed_scans=0 ORDER BY nd.created_at LIMIT ?`).all(now.toISOString(), limit) as Array<{ id: string; attempts: number; change_id: string; job_id: string; company_id: string; kind: string; created_at: string; read_at: string | null; company_name: string; job_title: string; application_url: string }>;
+      WHERE nd.channel IN ('DISCORD','DISCORD_SECONDARY') AND nd.status IN ('PENDING','FAILED') AND nd.next_attempt_at<=?
+      AND jp.active=1 AND jp.missed_scans=0 ORDER BY nd.created_at LIMIT ?`).all(now.toISOString(), limit) as Array<{ id: string; channel: string; attempts: number; change_id: string; job_id: string; company_id: string; kind: string; created_at: string; read_at: string | null; company_name: string; job_title: string; application_url: string }>;
     const claim = this.db.prepare("UPDATE notification_deliveries SET status='SENDING',attempts=attempts+1,updated_at=? WHERE id=? AND status IN ('PENDING','FAILED')");
     return rows.flatMap((row) => Number(claim.run(now.toISOString(), row.id).changes) ? [{
-      id: row.id, attempts: row.attempts + 1, notification: { id: row.change_id, jobId: row.job_id, companyId: row.company_id,
+      id: row.id, channel: row.channel as DiscordChannel, attempts: row.attempts + 1, notification: { id: row.change_id, jobId: row.job_id, companyId: row.company_id,
         kind: row.kind as DiscoveryChange["kind"], createdAt: row.created_at, readAt: row.read_at, companyName: row.company_name,
         jobTitle: row.job_title, applicationUrl: row.application_url },
     }] : []);
